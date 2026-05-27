@@ -3,29 +3,96 @@
   "poll_seconds": 10,
   "defaults": {
     "history_size": 30,
-    "vocalize": true,
+    "vocalize": false,
     "chart": false,
-    "poll_interval_seconds": 10,
-    "vocalize_master": false
+    "poll_interval_seconds": 15,
+    "vocalize_master": false,
+    "vocalization_engine": "macos_say",
+    "vocalization_interval_seconds": 10
   },
   "boxes": [
-    {"property": "heart_rate", "label": "Heart Rate", "type": "bpm", "chart": true},
+    {
+      "property": "heart_rate",
+      "label": "Heart Rate",
+      "type": "bpm",
+      "chart": true,
+      "vocalize": false,
+      "vocalization_short": "HR",
+      "vocalization_priority": 2,
+      "alerts": [
+        {
+          "name": "yellow",
+          "when": "above",
+          "threshold": 175,
+          "consecutive": 1
+        },
+        {
+          "name": "red",
+          "when": "above",
+          "threshold": 190,
+          "consecutive": 1,
+          "flash": true
+        }
+      ]
+    },
     {
       "property": "oxygen_saturation",
       "label": "Oxygen Saturation",
       "type": "percent",
+      "vocalize": true,
+      "vocalization_short": "Oxygen",
+      "vocalization_priority": 1,
       "chart": true,
       "alerts": [
-        {"name": "yellow", "when": "below", "threshold": 94, "consecutive": 3},
-        {"name": "red", "when": "below", "threshold": 94, "consecutive": 5, "flash": true}
+        {
+          "name": "yellow",
+          "when": "below",
+          "threshold": 94,
+          "consecutive": 3
+        },
+        {
+          "name": "red",
+          "when": "below",
+          "threshold": 94,
+          "consecutive": 5,
+          "flash": true
+        }
       ]
     },
-    {"property": "oxygen_10_av", "label": "Oxygen 10m Avg", "type": "percent"},
-    {"property": "skin_temperature", "label": "Skin Temp", "type": "int"},
-    {"property": "movement", "label": "Movement", "type": "int"},
-    {"property": "battery_minutes", "label": "Battery Time", "type": "minutes_duration"},
-    {"property": "battery_percentage", "label": "Battery", "type": "percent"},
-    {"property": "monitoring_start_time", "label": "Monitoring Start", "type": "epoch_with_age"},
-    {"property": "last_updated", "label": "Last Refreshed", "type": "refreshed_age_seconds"}
+    {
+      "property": "oxygen_10_av",
+      "label": "Oxygen 10m Avg",
+      "type": "percent"
+    },
+    {
+      "property": "skin_temperature",
+      "label": "Skin Temp",
+      "type": "int"
+    },
+    {
+      "property": "movement",
+      "label": "Movement",
+      "type": "int"
+    },
+    {
+      "property": "battery_minutes",
+      "label": "Battery Time",
+      "type": "minutes_duration"
+    },
+    {
+      "property": "battery_percentage",
+      "label": "Battery",
+      "type": "percent"
+    },
+    {
+      "property": "monitoring_start_time",
+      "label": "Monitoring Start",
+      "type": "epoch_with_age"
+    },
+    {
+      "property": "last_updated",
+      "label": "Last Refreshed",
+      "type": "refreshed_age_seconds"
+    }
   ]
 }

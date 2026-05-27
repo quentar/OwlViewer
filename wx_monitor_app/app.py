@@ -1,8 +1,12 @@
 import asyncio
 import json
 import math
+import queue
+import shutil
+import subprocess
 import sys
 import threading
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +17,7 @@ import wx
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
 LAYOUT_PATH = PROJECT_ROOT / "wx_monitor_app" / "layout.json"
+LAYOUT_BACKUP_PATH = PROJECT_ROOT / "wx_monitor_app" / "layout.settings-backup.json"
 
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
@@ -198,6 +203,7 @@ class MetricTile(wx.Panel):
 class OwletMonitorFrame(wx.Frame):
     def __init__(self) -> None:
         self.layout_config = self._load_layout_config()
+        self._backup_settings_file()
         title = str(self.layout_config.get("title", "Owlet Monitor"))
         super().__init__(parent=None, title=title, size=(1120, 820))
 
@@ -225,6 +231,13 @@ class OwletMonitorFrame(wx.Frame):
         self.default_chart = bool(defaults.get("chart", False))
         self.poll_seconds = int(defaults.get("poll_interval_seconds", self.layout_config.get("poll_seconds", 10)))
         self.vocalize_master_enabled = bool(defaults.get("vocalize_master", False))
+        self.vocalization_engine = str(defaults.get("vocalization_engine", "macos_say"))
+        self.vocalization_interval_seconds = int(defaults.get("vocalization_interval_seconds", 10))
+        self._last_vocalized_at: dict[str, float] = {}
+        self._speech_queue: queue.Queue[str] = queue.Queue()
+        self._speech_stop_event = threading.Event()
+        self._speech_thread = threading.Thread(target=self._speech_worker, daemon=True)
+        self._speech_thread.start()
 
         self.vocalize_master_btn = wx.Button(
             panel,
@@ -248,11 +261,12 @@ class OwletMonitorFrame(wx.Frame):
             label = str(box.get("label", prop))
             alerts = box.get("alerts", [])
             chart_enabled = bool(box.get("chart", self.default_chart))
+            tile_vocalize_default = bool(box.get("vocalize", self.default_vocalize))
             tile = MetricTile(
                 panel,
                 label=label,
                 alerts=alerts,
-                default_vocalize=self.default_vocalize,
+                default_vocalize=tile_vocalize_default,
                 chart_enabled=chart_enabled,
             )
             self.tiles[prop] = tile
@@ -261,6 +275,10 @@ class OwletMonitorFrame(wx.Frame):
             self._rule_counts[prop] = {}
             self._current_levels[prop] = "normal"
             self._series[prop] = []
+            tile.vocalize_cb.Bind(
+                wx.EVT_CHECKBOX,
+                lambda event, key=prop: self.on_tile_vocalize_change(event, key),
+            )
             self.tiles_grid.Add(tile, proportion=1, flag=wx.EXPAND)
 
         layout = wx.BoxSizer(wx.VERTICAL)
@@ -293,6 +311,12 @@ class OwletMonitorFrame(wx.Frame):
             raise ValueError(f"Invalid layout config: missing boxes list in {LAYOUT_PATH}")
         return data
 
+    def _backup_settings_file(self) -> None:
+        try:
+            shutil.copy2(LAYOUT_PATH, LAYOUT_BACKUP_PATH)
+        except OSError:
+            pass
+
     def set_status(self, text: str) -> None:
         self.status.SetLabel(text)
 
@@ -315,6 +339,7 @@ class OwletMonitorFrame(wx.Frame):
     def on_close(self, event: wx.CloseEvent) -> None:
         self._request_stop()
         self.ui_timer.Stop()
+        self._stop_speech_worker()
         event.Skip()
 
     def on_toggle_vocalize_master(self, _event: wx.CommandEvent) -> None:
@@ -332,9 +357,16 @@ class OwletMonitorFrame(wx.Frame):
         self._save_default_setting("poll_interval_seconds", self.poll_seconds)
         self.set_status(f"Polling interval set to {self.poll_seconds}s")
 
+    def on_tile_vocalize_change(self, _event: wx.CommandEvent, prop: str) -> None:
+        self.box_config[prop]["vocalize"] = self.tiles[prop].is_vocalize_enabled()
+        self._save_layout_config()
+
     def _save_default_setting(self, key: str, value: Any) -> None:
         defaults = self.layout_config.setdefault("defaults", {})
         defaults[key] = value
+        self._save_layout_config()
+
+    def _save_layout_config(self) -> None:
         with LAYOUT_PATH.open("w", encoding="utf-8") as file:
             json.dump(self.layout_config, file, indent=2)
             file.write("\n")
@@ -347,6 +379,12 @@ class OwletMonitorFrame(wx.Frame):
         self.flash_timer.Stop()
         self._apply_alert_backgrounds()
         self.set_status("Stopped")
+
+    def _stop_speech_worker(self) -> None:
+        if self._speech_stop_event.is_set():
+            return
+        self._speech_stop_event.set()
+        self._speech_queue.put("")
 
     def _run_monitor(self) -> None:
         try:
@@ -400,9 +438,11 @@ class OwletMonitorFrame(wx.Frame):
         return result["properties"]
 
     def _apply_metrics(self, props: dict[str, Any]) -> None:
+        previous_levels = dict(self._current_levels)
         self._latest_props = props
         now = datetime.now()
-        for prop in self.ordered_properties:
+        speak_items: list[tuple[int, int, str]] = []
+        for idx, prop in enumerate(self.ordered_properties):
             config = self.box_config[prop]
             raw_value = props.get(prop)
             self._append_series(prop, raw_value)
@@ -412,6 +452,13 @@ class OwletMonitorFrame(wx.Frame):
             tile.set_value(self._format_metric(config, raw_value, now), level)
             tile.set_alert_active_level(level)
             tile.set_chart_values(self._series[prop])
+            msg = self._build_vocalization_message(prop, raw_value, previous_levels.get(prop, "normal"), level)
+            if msg:
+                priority = int(config.get("vocalization_priority", idx + 100))
+                speak_items.append((priority, idx, msg))
+
+        for _, _, message in sorted(speak_items, key=lambda item: (item[0], item[1])):
+            self._speak(message)
 
         self._flashing_keys = {
             prop
@@ -424,6 +471,74 @@ class OwletMonitorFrame(wx.Frame):
             self.flash_timer.Stop()
             self._flash_on = False
         self._apply_alert_backgrounds()
+
+    def _build_vocalization_message(self, prop: str, value: Any, prev_level: str, level: str) -> str | None:
+        if self.vocalization_engine == "none":
+            return None
+        if not self.vocalize_master_enabled:
+            return None
+        tile = self.tiles[prop]
+        if not tile.is_vocalize_enabled():
+            return None
+
+        if level in {"yellow", "red"}:
+            message = self._vocalization_phrase(prop, value)
+            self._last_vocalized_at[prop] = time.time()
+            return message
+
+        now_ts = time.time()
+        last_ts = self._last_vocalized_at.get(prop, 0.0)
+        if now_ts - last_ts < self.vocalization_interval_seconds:
+            return None
+        message = self._vocalization_phrase(prop, value)
+        self._last_vocalized_at[prop] = now_ts
+        return message
+
+    def _vocalization_phrase(self, prop: str, value: Any) -> str:
+        box = self.box_config[prop]
+        shortcut = str(box.get("vocalization_short", box.get("label", prop)))
+        value_text = self._vocalization_value(box, value)
+        return f"{shortcut} {value_text}".strip()
+
+    def _vocalization_value(self, box: dict[str, Any], value: Any) -> str:
+        if value is None:
+            return "--"
+        value_type = str(box.get("type", "plain"))
+        try:
+            if value_type in {"bpm", "percent", "int"}:
+                return str(int(float(value)))
+            if value_type == "minutes_duration":
+                total = int(float(value))
+                return f"{total // 60} {total % 60}"
+        except (TypeError, ValueError):
+            return str(value)
+        return str(value)
+
+    def _speak(self, text: str) -> None:
+        if not text:
+            return
+        self._speech_queue.put(text)
+
+    def _speech_worker(self) -> None:
+        while not self._speech_stop_event.is_set():
+            try:
+                text = self._speech_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if self._speech_stop_event.is_set():
+                break
+            if not text:
+                continue
+
+            if self.vocalization_engine == "macos_say":
+                say_bin = shutil.which("say")
+                if not say_bin:
+                    continue
+                try:
+                    subprocess.run([say_bin, text], check=False)
+                except OSError:
+                    continue
+
 
     def _append_series(self, prop: str, raw_value: Any) -> None:
         try:
