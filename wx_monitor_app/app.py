@@ -224,6 +224,7 @@ class OwletMonitorFrame(wx.Frame):
         self._flash_on = False
         self._latest_props: dict[str, Any] = {}
         self._series: dict[str, list[float]] = {}
+        self._alarm_test_until: float = 0.0
 
         defaults = self.layout_config.get("defaults", {})
         self.default_vocalize = bool(defaults.get("vocalize", True))
@@ -245,6 +246,9 @@ class OwletMonitorFrame(wx.Frame):
         )
         self.interval_label = wx.StaticText(panel, label="Interval (s):")
         self.interval_ctrl = wx.SpinCtrl(panel, min=1, max=300, initial=self.poll_seconds)
+        self.vocal_interval_label = wx.StaticText(panel, label="Vocal Int (s):")
+        self.vocal_interval_ctrl = wx.SpinCtrl(panel, min=1, max=3600, initial=self.vocalization_interval_seconds)
+        self.alarm_test_btn = wx.Button(panel, label="Alarm Test")
 
         button_row = wx.BoxSizer(wx.HORIZONTAL)
         button_row.Add(self.start_btn, flag=wx.RIGHT, border=8)
@@ -254,6 +258,11 @@ class OwletMonitorFrame(wx.Frame):
         button_row.AddSpacer(12)
         button_row.Add(self.interval_label, flag=wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, border=6)
         button_row.Add(self.interval_ctrl, flag=wx.ALIGN_CENTER_VERTICAL)
+        button_row.AddSpacer(12)
+        button_row.Add(self.vocal_interval_label, flag=wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, border=6)
+        button_row.Add(self.vocal_interval_ctrl, flag=wx.ALIGN_CENTER_VERTICAL)
+        button_row.AddStretchSpacer(1)
+        button_row.Add(self.alarm_test_btn, flag=wx.ALIGN_CENTER_VERTICAL)
 
         self.tiles_grid = wx.GridSizer(rows=0, cols=1, vgap=8, hgap=8)
         for box in self.layout_config["boxes"]:
@@ -300,6 +309,8 @@ class OwletMonitorFrame(wx.Frame):
         self.stop_btn.Bind(wx.EVT_BUTTON, self.on_stop)
         self.vocalize_master_btn.Bind(wx.EVT_BUTTON, self.on_toggle_vocalize_master)
         self.interval_ctrl.Bind(wx.EVT_SPINCTRL, self.on_interval_change)
+        self.vocal_interval_ctrl.Bind(wx.EVT_SPINCTRL, self.on_vocal_interval_change)
+        self.alarm_test_btn.Bind(wx.EVT_BUTTON, self.on_alarm_test)
         self.Bind(wx.EVT_CLOSE, self.on_close)
         self.Bind(wx.EVT_SIZE, self._on_resize)
         self._reflow_grid()
@@ -356,6 +367,20 @@ class OwletMonitorFrame(wx.Frame):
         self.poll_seconds = int(self.interval_ctrl.GetValue())
         self._save_default_setting("poll_interval_seconds", self.poll_seconds)
         self.set_status(f"Polling interval set to {self.poll_seconds}s")
+
+    def on_vocal_interval_change(self, _event: wx.CommandEvent) -> None:
+        self.vocalization_interval_seconds = int(self.vocal_interval_ctrl.GetValue())
+        self._save_default_setting("vocalization_interval_seconds", self.vocalization_interval_seconds)
+        self.set_status(f"Vocalization interval set to {self.vocalization_interval_seconds}s")
+
+    def on_alarm_test(self, _event: wx.CommandEvent) -> None:
+        self._speak("Test alarm")
+        self._alarm_test_until = time.time() + 5.0
+        self._flashing_keys.update({"heart_rate", "oxygen_saturation"})
+        if not self.flash_timer.IsRunning():
+            self.flash_timer.Start(500)
+        self._apply_alert_backgrounds()
+        self.set_status("Alarm test sent")
 
     def on_tile_vocalize_change(self, _event: wx.CommandEvent, prop: str) -> None:
         self.box_config[prop]["vocalize"] = self.tiles[prop].is_vocalize_enabled()
@@ -475,8 +500,6 @@ class OwletMonitorFrame(wx.Frame):
     def _build_vocalization_message(self, prop: str, value: Any, prev_level: str, level: str) -> str | None:
         if self.vocalization_engine == "none":
             return None
-        if not self.vocalize_master_enabled:
-            return None
         tile = self.tiles[prop]
         if not tile.is_vocalize_enabled():
             return None
@@ -485,6 +508,9 @@ class OwletMonitorFrame(wx.Frame):
             message = self._vocalization_phrase(prop, value)
             self._last_vocalized_at[prop] = time.time()
             return message
+
+        if not self.vocalize_master_enabled:
+            return None
 
         now_ts = time.time()
         last_ts = self._last_vocalized_at.get(prop, 0.0)
@@ -552,9 +578,17 @@ class OwletMonitorFrame(wx.Frame):
             del series[0 : len(series) - history_size]
 
     def _apply_alert_backgrounds(self) -> None:
+        now_ts = time.time()
+        if self._alarm_test_until and now_ts >= self._alarm_test_until:
+            self._alarm_test_until = 0.0
+            self._flashing_keys.discard("heart_rate")
+            self._flashing_keys.discard("oxygen_saturation")
         for prop in self.ordered_properties:
             level = self._current_levels.get(prop, "normal")
-            flash_on = self._flash_on and prop in self._flashing_keys
+            test_flash_active = self._alarm_test_until > now_ts and prop in {"heart_rate", "oxygen_saturation"}
+            flash_on = self._flash_on and (prop in self._flashing_keys or test_flash_active)
+            if test_flash_active and level == "normal":
+                level = "red"
             self.tiles[prop].set_alert_background(level, flash_on)
 
     def _on_flash_timer(self, _event: wx.TimerEvent) -> None:

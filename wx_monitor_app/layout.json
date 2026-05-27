@@ -5,10 +5,10 @@
     "history_size": 30,
     "vocalize": false,
     "chart": false,
-    "poll_interval_seconds": 15,
-    "vocalize_master": false,
+    "poll_interval_seconds": 11,
+    "vocalize_master": true,
     "vocalization_engine": "macos_say",
-    "vocalization_interval_seconds": 10
+    "vocalization_interval_seconds": 30
   },
   "boxes": [
     {
@@ -72,7 +72,9 @@
     {
       "property": "movement",
       "label": "Movement",
-      "type": "int"
+      "type": "int",
+      "vocalize": false,
+      "chart": true
     },
     {
       "property": "battery_minutes",
