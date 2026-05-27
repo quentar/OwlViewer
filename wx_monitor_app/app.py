@@ -4,7 +4,7 @@ import math
 import sys
 import threading
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -30,12 +30,74 @@ LEVEL_COLORS = {
 FLASH_RED = wx.Colour(255, 120, 120)
 TEXT_COLOR = wx.Colour(20, 20, 20)
 TITLE_COLOR = wx.Colour(35, 35, 35)
+LINE_COLOR = wx.Colour(35, 117, 255)
+
+
+class SparklinePanel(wx.Panel):
+    def __init__(self, parent: wx.Window) -> None:
+        super().__init__(parent)
+        self.SetMinSize((120, 54))
+        self.values: list[float] = []
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+
+    def set_values(self, values: list[float]) -> None:
+        self.values = values
+        self.Refresh()
+
+    def _on_paint(self, _event: wx.PaintEvent) -> None:
+        dc = wx.PaintDC(self)
+        w, h = self.GetClientSize()
+        dc.SetBrush(wx.Brush(wx.Colour(248, 252, 255)))
+        dc.SetPen(wx.Pen(wx.Colour(230, 235, 242), 1))
+        dc.DrawRectangle(0, 0, w, h)
+
+        if not self.values:
+            return
+
+        vals = self.values
+        vmin = min(vals)
+        vmax = max(vals)
+        if abs(vmax - vmin) < 1e-9:
+            vmin -= 1.0
+            vmax += 1.0
+
+        left_pad = 8
+        right_pad = 8
+        top_pad = 6
+        bottom_pad = 6
+        usable_w = max(w - left_pad - right_pad, 1)
+        usable_h = max(h - top_pad - bottom_pad, 1)
+
+        n = len(vals)
+        points: list[wx.Point] = []
+        for i, value in enumerate(vals):
+            if n == 1:
+                x = left_pad + usable_w // 2
+            else:
+                x = int(left_pad + (usable_w * i / (n - 1)))
+            ratio = (value - vmin) / (vmax - vmin)
+            y = int(top_pad + usable_h - (ratio * usable_h))
+            points.append(wx.Point(x, y))
+
+        dc.SetPen(wx.Pen(LINE_COLOR, 2))
+        if len(points) > 1:
+            dc.DrawLines(points)
+        dc.SetBrush(wx.Brush(LINE_COLOR))
+        last = points[-1]
+        dc.DrawCircle(last.x, last.y, 3)
 
 
 class MetricTile(wx.Panel):
-    def __init__(self, parent: wx.Window, label: str) -> None:
+    def __init__(
+        self,
+        parent: wx.Window,
+        label: str,
+        alerts: list[dict[str, Any]],
+        default_vocalize: bool,
+        chart_enabled: bool,
+    ) -> None:
         super().__init__(parent)
-        self.SetMinSize((180, 120))
+        self.SetMinSize((180, 150))
         self.SetBackgroundColour(wx.Colour(245, 246, 248))
 
         self.inner = wx.Panel(self)
@@ -49,19 +111,51 @@ class MetricTile(wx.Panel):
         self.value.SetForegroundColour(TEXT_COLOR)
         self._set_best_font("--")
 
+        self.alert_rows: list[dict[str, Any]] = []
+        alert_sizer = wx.BoxSizer(wx.VERTICAL)
+        for alert in alerts:
+            row = wx.BoxSizer(wx.HORIZONTAL)
+            info = wx.StaticText(self.inner, label=self._alert_label(alert))
+            info.SetForegroundColour(wx.Colour(70, 70, 70))
+            cb = wx.CheckBox(self.inner, label="🔊")
+            cb.SetValue(bool(alert.get("vocalize", default_vocalize)))
+            row.Add(info, proportion=1, flag=wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, border=8)
+            row.Add(cb, flag=wx.ALIGN_CENTER_VERTICAL)
+            alert_sizer.Add(row, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
+            self.alert_rows.append({"name": str(alert.get("name", "alert")), "label": info, "checkbox": cb})
+
+        self.chart_enabled = chart_enabled
+        self.chart: SparklinePanel | None = SparklinePanel(self.inner) if self.chart_enabled else None
+
         inner_layout = wx.BoxSizer(wx.VERTICAL)
         inner_layout.Add(self.title, flag=wx.ALL, border=10)
         inner_layout.Add(self.value, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
+        inner_layout.Add(alert_sizer, proportion=0, flag=wx.EXPAND)
+        if self.chart_enabled and self.chart is not None:
+            inner_layout.Add(self.chart, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
         self.inner.SetSizer(inner_layout)
 
         border = wx.BoxSizer(wx.VERTICAL)
         border.Add(self.inner, proportion=1, flag=wx.ALL | wx.EXPAND, border=3)
         self.SetSizer(border)
 
-    def set_value(self, value: str) -> None:
-        self._set_best_font(value)
-        self.value.SetLabel(value)
+    def _alert_label(self, alert: dict[str, Any]) -> str:
+        name = str(alert.get("name", "alert"))
+        when = str(alert.get("when", "below"))
+        threshold = alert.get("threshold", "?")
+        consecutive = int(alert.get("consecutive", 1))
+        return f"{name}: {when} {threshold} x{consecutive}"
+
+    def set_value(self, value: str, level: str) -> None:
+        display = value if level == "normal" else f"{value} ({level})"
+        self._set_best_font(display)
+        self.value.SetLabel(display)
         self.Layout()
+
+    def set_alert_active_level(self, level: str) -> None:
+        for row in self.alert_rows:
+            is_active = row["name"].lower() == level
+            row["label"].SetForegroundColour(wx.Colour(160, 0, 0) if is_active else wx.Colour(70, 70, 70))
 
     def set_alert_background(self, level: str, flash_on: bool = False) -> None:
         if level == "red" and flash_on:
@@ -71,16 +165,21 @@ class MetricTile(wx.Panel):
         self.inner.SetBackgroundColour(color)
         self.inner.Refresh()
 
+    def set_chart_values(self, values: list[float]) -> None:
+        if not self.chart_enabled or self.chart is None:
+            return
+        self.chart.set_values(values)
+
     def _set_best_font(self, text: str) -> None:
         width = max(self.GetSize().GetWidth() - 24, 120)
-        height = max(self.GetSize().GetHeight() - 54, 50)
-        for point in range(62, 15, -1):
+        height = max(self.GetSize().GetHeight() - 120, 46)
+        for point in range(62, 14, -1):
             font = wx.Font(point, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
             self.value.SetFont(font)
             tw, th = self.value.GetTextExtent(text)
             if tw <= width and th <= height:
                 return
-        self.value.SetFont(wx.Font(16, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        self.value.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
 
 
 class OwletMonitorFrame(wx.Frame):
@@ -99,10 +198,18 @@ class OwletMonitorFrame(wx.Frame):
         self.box_config: dict[str, dict[str, Any]] = {}
         self.ordered_properties: list[str] = []
         self._grid_cols = 1
-        self._consecutive_counts: dict[str, int] = {}
+
+        self._rule_counts: dict[str, dict[str, int]] = {}
         self._current_levels: dict[str, str] = {}
         self._flashing_keys: set[str] = set()
         self._flash_on = False
+        self._latest_props: dict[str, Any] = {}
+        self._series: dict[str, list[float]] = {}
+
+        defaults = self.layout_config.get("defaults", {})
+        self.default_vocalize = bool(defaults.get("vocalize", True))
+        self.default_history_size = int(defaults.get("history_size", 30))
+        self.default_chart = bool(defaults.get("chart", False))
 
         button_row = wx.BoxSizer(wx.HORIZONTAL)
         button_row.Add(self.start_btn, flag=wx.RIGHT, border=8)
@@ -112,12 +219,21 @@ class OwletMonitorFrame(wx.Frame):
         for box in self.layout_config["boxes"]:
             prop = str(box["property"])
             label = str(box.get("label", prop))
-            tile = MetricTile(panel, label=label)
+            alerts = box.get("alerts", [])
+            chart_enabled = bool(box.get("chart", self.default_chart))
+            tile = MetricTile(
+                panel,
+                label=label,
+                alerts=alerts,
+                default_vocalize=self.default_vocalize,
+                chart_enabled=chart_enabled,
+            )
             self.tiles[prop] = tile
             self.box_config[prop] = box
             self.ordered_properties.append(prop)
-            self._consecutive_counts[prop] = 0
+            self._rule_counts[prop] = {}
             self._current_levels[prop] = "normal"
+            self._series[prop] = []
             self.tiles_grid.Add(tile, proportion=1, flag=wx.EXPAND)
 
         layout = wx.BoxSizer(wx.VERTICAL)
@@ -131,7 +247,10 @@ class OwletMonitorFrame(wx.Frame):
         self._thread: threading.Thread | None = None
 
         self.flash_timer = wx.Timer(self)
+        self.ui_timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_flash_timer, self.flash_timer)
+        self.Bind(wx.EVT_TIMER, self._on_ui_timer, self.ui_timer)
+        self.ui_timer.Start(1000)
 
         self.start_btn.Bind(wx.EVT_BUTTON, self.on_start)
         self.stop_btn.Bind(wx.EVT_BUTTON, self.on_stop)
@@ -167,6 +286,7 @@ class OwletMonitorFrame(wx.Frame):
 
     def on_close(self, event: wx.CloseEvent) -> None:
         self._request_stop()
+        self.ui_timer.Stop()
         event.Skip()
 
     def _request_stop(self) -> None:
@@ -230,27 +350,41 @@ class OwletMonitorFrame(wx.Frame):
         return result["properties"]
 
     def _apply_metrics(self, props: dict[str, Any]) -> None:
+        self._latest_props = props
         now = datetime.now()
         for prop in self.ordered_properties:
-            tile = self.tiles[prop]
             config = self.box_config[prop]
             raw_value = props.get(prop)
-            tile.set_value(self._format_metric(config, raw_value, now))
-            self._current_levels[prop] = self._evaluate_alert_level(config, raw_value)
+            self._append_series(prop, raw_value)
+            level = self._evaluate_alert_level(config, raw_value)
+            self._current_levels[prop] = level
+            tile = self.tiles[prop]
+            tile.set_value(self._format_metric(config, raw_value, now), level)
+            tile.set_alert_active_level(level)
+            tile.set_chart_values(self._series[prop])
 
         self._flashing_keys = {
             prop
             for prop in self.ordered_properties
             if self._current_levels.get(prop) == "red" and self._should_flash_red(self.box_config[prop])
         }
-
         if self._flashing_keys and not self.flash_timer.IsRunning():
             self.flash_timer.Start(500)
         if not self._flashing_keys and self.flash_timer.IsRunning():
             self.flash_timer.Stop()
             self._flash_on = False
-
         self._apply_alert_backgrounds()
+
+    def _append_series(self, prop: str, raw_value: Any) -> None:
+        try:
+            numeric = float(raw_value)
+        except (TypeError, ValueError):
+            return
+        history_size = int(self.box_config[prop].get("history_size", self.default_history_size))
+        series = self._series[prop]
+        series.append(numeric)
+        if len(series) > history_size:
+            del series[0 : len(series) - history_size]
 
     def _apply_alert_backgrounds(self) -> None:
         for prop in self.ordered_properties:
@@ -261,6 +395,20 @@ class OwletMonitorFrame(wx.Frame):
     def _on_flash_timer(self, _event: wx.TimerEvent) -> None:
         self._flash_on = not self._flash_on
         self._apply_alert_backgrounds()
+
+    def _on_ui_timer(self, _event: wx.TimerEvent) -> None:
+        if not self._latest_props:
+            return
+        self._refresh_dynamic_display(datetime.now())
+
+    def _refresh_dynamic_display(self, now: datetime) -> None:
+        for prop in self.ordered_properties:
+            config = self.box_config[prop]
+            if config.get("type") not in {"epoch_with_age", "refreshed_age_seconds"}:
+                continue
+            raw_value = self._latest_props.get(prop)
+            level = self._current_levels.get(prop, "normal")
+            self.tiles[prop].set_value(self._format_metric(config, raw_value, now), level)
 
     def _on_resize(self, event: wx.SizeEvent) -> None:
         self._reflow_grid()
@@ -293,39 +441,46 @@ class OwletMonitorFrame(wx.Frame):
             self.Layout()
 
     def _evaluate_alert_level(self, config: dict[str, Any], value: Any) -> str:
-        alerts = config.get("alerts")
+        alerts = config.get("alerts") or []
         if not alerts:
             return "normal"
 
-        try:
-            numeric_value = float(value)
-        except (TypeError, ValueError):
-            self._consecutive_counts[config["property"]] = 0
-            return "normal"
-
         prop = str(config["property"])
-        rules: list[dict[str, Any]] = [r for r in alerts if r.get("when") == "below"]
-        if not rules:
-            return "normal"
+        if prop not in self._rule_counts:
+            self._rule_counts[prop] = {}
 
-        threshold = float(rules[0].get("threshold", -1))
-        if numeric_value < threshold:
-            self._consecutive_counts[prop] = self._consecutive_counts.get(prop, 0) + 1
-        else:
-            self._consecutive_counts[prop] = 0
+        level_rank = {"normal": 0, "yellow": 1, "red": 2}
+        active = "normal"
 
-        count = self._consecutive_counts[prop]
-        level = "normal"
-        for rule in sorted(rules, key=lambda r: int(r.get("consecutive", 0))):
-            needed = int(rule.get("consecutive", 0))
-            if count >= needed:
-                level = str(rule.get("name", "normal"))
-        return level
+        for idx, alert in enumerate(alerts):
+            key = str(alert.get("name", f"rule_{idx}"))
+            try:
+                numeric_value = float(value)
+                threshold = float(alert.get("threshold"))
+            except (TypeError, ValueError):
+                self._rule_counts[prop][key] = 0
+                continue
+
+            cond = False
+            when = str(alert.get("when", "below"))
+            if when == "below":
+                cond = numeric_value < threshold
+            elif when == "above":
+                cond = numeric_value > threshold
+
+            self._rule_counts[prop][key] = self._rule_counts[prop].get(key, 0) + 1 if cond else 0
+            needed = int(alert.get("consecutive", 1))
+            if self._rule_counts[prop][key] >= needed:
+                level = str(alert.get("name", "normal")).lower()
+                if level_rank.get(level, 0) > level_rank.get(active, 0):
+                    active = level
+
+        return active
 
     def _should_flash_red(self, config: dict[str, Any]) -> bool:
         alerts = config.get("alerts") or []
         for rule in alerts:
-            if str(rule.get("name")) == "red" and bool(rule.get("flash", False)):
+            if str(rule.get("name", "")).lower() == "red" and bool(rule.get("flash", False)):
                 return True
         return False
 
@@ -348,13 +503,13 @@ class OwletMonitorFrame(wx.Frame):
             try:
                 dt = datetime.fromtimestamp(int(value))
                 age = self._human_age(now - dt)
-                return f"{dt.strftime('%H:%M:%S')}\n{age}"
+                return f"{dt.strftime('%H:%M:%S')} {age}"
             except (ValueError, TypeError, OSError):
                 return str(value)
         if value_type == "refreshed_age_seconds":
             try:
-                dt = datetime.strptime(str(value), "%Y/%m/%d %H:%M:%S")
-                age_s = max(int((now - dt).total_seconds()), 0)
+                dt = datetime.strptime(str(value), "%Y/%m/%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                age_s = max(int((datetime.now(timezone.utc) - dt).total_seconds()), 0)
                 return f"{age_s}s ago"
             except ValueError:
                 return str(value)

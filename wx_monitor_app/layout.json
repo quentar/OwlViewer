@@ -1,25 +1,29 @@
 {
   "title": "Owlet Live Monitor",
   "poll_seconds": 10,
+  "defaults": {
+    "history_size": 30,
+    "vocalize": true,
+    "chart": false
+  },
   "boxes": [
-    {"property": "heart_rate", "label": "Heart Rate", "type": "bpm", "width": 280, "height": 150},
+    {"property": "heart_rate", "label": "Heart Rate", "type": "bpm", "chart": true},
     {
       "property": "oxygen_saturation",
       "label": "Oxygen Saturation",
       "type": "percent",
-      "width": 280,
-      "height": 150,
+      "chart": true,
       "alerts": [
         {"name": "yellow", "when": "below", "threshold": 94, "consecutive": 3},
         {"name": "red", "when": "below", "threshold": 94, "consecutive": 5, "flash": true}
       ]
     },
-    {"property": "oxygen_10_av", "label": "Oxygen 10m Avg", "type": "percent", "width": 280, "height": 150},
-    {"property": "battery_percentage", "label": "Battery", "type": "percent", "width": 220, "height": 140},
-    {"property": "battery_minutes", "label": "Battery Time", "type": "minutes_duration", "width": 280, "height": 140},
-    {"property": "movement", "label": "Movement", "type": "int", "width": 220, "height": 140},
-    {"property": "skin_temperature", "label": "Skin Temp", "type": "int", "width": 220, "height": 140},
-    {"property": "monitoring_start_time", "label": "Monitoring Start", "type": "epoch_with_age", "width": 420, "height": 170},
-    {"property": "last_updated", "label": "Last Refreshed", "type": "refreshed_age_seconds", "width": 420, "height": 170}
+    {"property": "oxygen_10_av", "label": "Oxygen 10m Avg", "type": "percent"},
+    {"property": "battery_percentage", "label": "Battery", "type": "percent"},
+    {"property": "battery_minutes", "label": "Battery Time", "type": "minutes_duration"},
+    {"property": "movement", "label": "Movement", "type": "int"},
+    {"property": "skin_temperature", "label": "Skin Temp", "type": "int"},
+    {"property": "monitoring_start_time", "label": "Monitoring Start", "type": "epoch_with_age"},
+    {"property": "last_updated", "label": "Last Refreshed", "type": "refreshed_age_seconds"}
   ]
 }
