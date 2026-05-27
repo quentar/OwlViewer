@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import sys
 import threading
 import traceback
@@ -32,9 +33,9 @@ TITLE_COLOR = wx.Colour(35, 35, 35)
 
 
 class MetricTile(wx.Panel):
-    def __init__(self, parent: wx.Window, label: str, width: int, height: int) -> None:
+    def __init__(self, parent: wx.Window, label: str) -> None:
         super().__init__(parent)
-        self.SetMinSize((width, height))
+        self.SetMinSize((180, 120))
         self.SetBackgroundColour(wx.Colour(245, 246, 248))
 
         self.inner = wx.Panel(self)
@@ -71,8 +72,8 @@ class MetricTile(wx.Panel):
         self.inner.Refresh()
 
     def _set_best_font(self, text: str) -> None:
-        width = max(self.GetMinSize().GetWidth() - 24, 120)
-        height = max(self.GetMinSize().GetHeight() - 54, 50)
+        width = max(self.GetSize().GetWidth() - 24, 120)
+        height = max(self.GetSize().GetHeight() - 54, 50)
         for point in range(62, 15, -1):
             font = wx.Font(point, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
             self.value.SetFont(font)
@@ -97,6 +98,7 @@ class OwletMonitorFrame(wx.Frame):
         self.tiles: dict[str, MetricTile] = {}
         self.box_config: dict[str, dict[str, Any]] = {}
         self.ordered_properties: list[str] = []
+        self._grid_cols = 1
         self._consecutive_counts: dict[str, int] = {}
         self._current_levels: dict[str, str] = {}
         self._flashing_keys: set[str] = set()
@@ -106,24 +108,22 @@ class OwletMonitorFrame(wx.Frame):
         button_row.Add(self.start_btn, flag=wx.RIGHT, border=8)
         button_row.Add(self.stop_btn)
 
-        self.tiles_wrap = wx.WrapSizer(wx.HORIZONTAL)
+        self.tiles_grid = wx.GridSizer(rows=0, cols=1, vgap=8, hgap=8)
         for box in self.layout_config["boxes"]:
             prop = str(box["property"])
             label = str(box.get("label", prop))
-            width = int(box.get("width", 260))
-            height = int(box.get("height", 130))
-            tile = MetricTile(panel, label=label, width=width, height=height)
+            tile = MetricTile(panel, label=label)
             self.tiles[prop] = tile
             self.box_config[prop] = box
             self.ordered_properties.append(prop)
             self._consecutive_counts[prop] = 0
             self._current_levels[prop] = "normal"
-            self.tiles_wrap.Add(tile, flag=wx.ALL, border=6)
+            self.tiles_grid.Add(tile, proportion=1, flag=wx.EXPAND)
 
         layout = wx.BoxSizer(wx.VERTICAL)
         layout.Add(self.status, flag=wx.ALL | wx.EXPAND, border=10)
         layout.Add(button_row, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=10)
-        layout.Add(self.tiles_wrap, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
+        layout.Add(self.tiles_grid, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
         panel.SetSizer(layout)
 
         self.poll_seconds = int(self.layout_config.get("poll_seconds", 10))
@@ -136,6 +136,8 @@ class OwletMonitorFrame(wx.Frame):
         self.start_btn.Bind(wx.EVT_BUTTON, self.on_start)
         self.stop_btn.Bind(wx.EVT_BUTTON, self.on_stop)
         self.Bind(wx.EVT_CLOSE, self.on_close)
+        self.Bind(wx.EVT_SIZE, self._on_resize)
+        self._reflow_grid()
 
     def _load_layout_config(self) -> dict[str, Any]:
         with LAYOUT_PATH.open("r", encoding="utf-8") as file:
@@ -259,6 +261,36 @@ class OwletMonitorFrame(wx.Frame):
     def _on_flash_timer(self, _event: wx.TimerEvent) -> None:
         self._flash_on = not self._flash_on
         self._apply_alert_backgrounds()
+
+    def _on_resize(self, event: wx.SizeEvent) -> None:
+        self._reflow_grid()
+        event.Skip()
+
+    def _reflow_grid(self) -> None:
+        n = len(self.ordered_properties)
+        if n == 0:
+            return
+
+        available = self.GetClientSize()
+        best_cols = 1
+        best_score = -1.0
+        target_ratio = 1.35
+        for cols in range(1, n + 1):
+            rows = math.ceil(n / cols)
+            cell_w = max((available.width - (cols - 1) * 8 - 40) / cols, 1)
+            cell_h = max((available.height - (rows - 1) * 8 - 130) / rows, 1)
+            area = cell_w * cell_h
+            ratio_penalty = abs((cell_w / cell_h) - target_ratio)
+            score = area - (ratio_penalty * 5000)
+            if score > best_score:
+                best_score = score
+                best_cols = cols
+
+        if best_cols != self._grid_cols:
+            self._grid_cols = best_cols
+            self.tiles_grid.SetCols(best_cols)
+            self.tiles_grid.SetRows(math.ceil(n / best_cols))
+            self.Layout()
 
     def _evaluate_alert_level(self, config: dict[str, Any], value: Any) -> str:
         alerts = config.get("alerts")
