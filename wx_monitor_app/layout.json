@@ -21,10 +21,10 @@
       ]
     },
     {"property": "oxygen_10_av", "label": "Oxygen 10m Avg", "type": "percent"},
-    {"property": "battery_percentage", "label": "Battery", "type": "percent"},
-    {"property": "battery_minutes", "label": "Battery Time", "type": "minutes_duration"},
-    {"property": "movement", "label": "Movement", "type": "int"},
     {"property": "skin_temperature", "label": "Skin Temp", "type": "int"},
+    {"property": "movement", "label": "Movement", "type": "int"},
+    {"property": "battery_minutes", "label": "Battery Time", "type": "minutes_duration"},
+    {"property": "battery_percentage", "label": "Battery", "type": "percent"},
     {"property": "monitoring_start_time", "label": "Monitoring Start", "type": "epoch_with_age"},
     {"property": "last_updated", "label": "Last Refreshed", "type": "refreshed_age_seconds"}
   ]
