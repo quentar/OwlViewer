@@ -61,7 +61,15 @@ class SparklinePanel(wx.Panel):
             vmin -= 1.0
             vmax += 1.0
 
-        left_pad = 8
+        axis_font = wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+        dc.SetFont(axis_font)
+        dc.SetTextForeground(LINE_COLOR)
+        dc.DrawText(f"{vmax:.1f}", 4, 2)
+        min_label = f"{vmin:.1f}"
+        tw, th = dc.GetTextExtent(min_label)
+        dc.DrawText(min_label, 4, max(h - th - 2, 0))
+
+        left_pad = max(tw + 12, 34)
         right_pad = 8
         top_pad = 6
         bottom_pad = 6
@@ -106,6 +114,8 @@ class MetricTile(wx.Panel):
         self.title = wx.StaticText(self.inner, label=label)
         self.title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
         self.title.SetForegroundColour(TITLE_COLOR)
+        self.vocalize_cb = wx.CheckBox(self.inner, label="🔊")
+        self.vocalize_cb.SetValue(default_vocalize)
 
         self.value = wx.StaticText(self.inner, label="--")
         self.value.SetForegroundColour(TEXT_COLOR)
@@ -117,18 +127,18 @@ class MetricTile(wx.Panel):
             row = wx.BoxSizer(wx.HORIZONTAL)
             info = wx.StaticText(self.inner, label=self._alert_label(alert))
             info.SetForegroundColour(wx.Colour(70, 70, 70))
-            cb = wx.CheckBox(self.inner, label="🔊")
-            cb.SetValue(bool(alert.get("vocalize", default_vocalize)))
             row.Add(info, proportion=1, flag=wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, border=8)
-            row.Add(cb, flag=wx.ALIGN_CENTER_VERTICAL)
             alert_sizer.Add(row, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
-            self.alert_rows.append({"name": str(alert.get("name", "alert")), "label": info, "checkbox": cb})
+            self.alert_rows.append({"name": str(alert.get("name", "alert")), "label": info})
 
         self.chart_enabled = chart_enabled
         self.chart: SparklinePanel | None = SparklinePanel(self.inner) if self.chart_enabled else None
 
         inner_layout = wx.BoxSizer(wx.VERTICAL)
-        inner_layout.Add(self.title, flag=wx.ALL, border=10)
+        title_row = wx.BoxSizer(wx.HORIZONTAL)
+        title_row.Add(self.title, proportion=1, flag=wx.ALIGN_CENTER_VERTICAL)
+        title_row.Add(self.vocalize_cb, flag=wx.ALIGN_CENTER_VERTICAL)
+        inner_layout.Add(title_row, flag=wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND, border=10)
         inner_layout.Add(self.value, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
         inner_layout.Add(alert_sizer, proportion=0, flag=wx.EXPAND)
         if self.chart_enabled and self.chart is not None:
@@ -170,6 +180,9 @@ class MetricTile(wx.Panel):
             return
         self.chart.set_values(values)
 
+    def is_vocalize_enabled(self) -> bool:
+        return self.vocalize_cb.GetValue()
+
     def _set_best_font(self, text: str) -> None:
         width = max(self.GetSize().GetWidth() - 24, 120)
         height = max(self.GetSize().GetHeight() - 120, 46)
@@ -210,10 +223,24 @@ class OwletMonitorFrame(wx.Frame):
         self.default_vocalize = bool(defaults.get("vocalize", True))
         self.default_history_size = int(defaults.get("history_size", 30))
         self.default_chart = bool(defaults.get("chart", False))
+        self.poll_seconds = int(defaults.get("poll_interval_seconds", self.layout_config.get("poll_seconds", 10)))
+        self.vocalize_master_enabled = bool(defaults.get("vocalize_master", False))
+
+        self.vocalize_master_btn = wx.Button(
+            panel,
+            label="Vocalize: ON" if self.vocalize_master_enabled else "Vocalize: OFF",
+        )
+        self.interval_label = wx.StaticText(panel, label="Interval (s):")
+        self.interval_ctrl = wx.SpinCtrl(panel, min=1, max=300, initial=self.poll_seconds)
 
         button_row = wx.BoxSizer(wx.HORIZONTAL)
         button_row.Add(self.start_btn, flag=wx.RIGHT, border=8)
         button_row.Add(self.stop_btn)
+        button_row.AddSpacer(12)
+        button_row.Add(self.vocalize_master_btn)
+        button_row.AddSpacer(12)
+        button_row.Add(self.interval_label, flag=wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, border=6)
+        button_row.Add(self.interval_ctrl, flag=wx.ALIGN_CENTER_VERTICAL)
 
         self.tiles_grid = wx.GridSizer(rows=0, cols=1, vgap=8, hgap=8)
         for box in self.layout_config["boxes"]:
@@ -242,7 +269,6 @@ class OwletMonitorFrame(wx.Frame):
         layout.Add(self.tiles_grid, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
         panel.SetSizer(layout)
 
-        self.poll_seconds = int(self.layout_config.get("poll_seconds", 10))
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -254,6 +280,8 @@ class OwletMonitorFrame(wx.Frame):
 
         self.start_btn.Bind(wx.EVT_BUTTON, self.on_start)
         self.stop_btn.Bind(wx.EVT_BUTTON, self.on_stop)
+        self.vocalize_master_btn.Bind(wx.EVT_BUTTON, self.on_toggle_vocalize_master)
+        self.interval_ctrl.Bind(wx.EVT_SPINCTRL, self.on_interval_change)
         self.Bind(wx.EVT_CLOSE, self.on_close)
         self.Bind(wx.EVT_SIZE, self._on_resize)
         self._reflow_grid()
@@ -288,6 +316,28 @@ class OwletMonitorFrame(wx.Frame):
         self._request_stop()
         self.ui_timer.Stop()
         event.Skip()
+
+    def on_toggle_vocalize_master(self, _event: wx.CommandEvent) -> None:
+        self.vocalize_master_enabled = not self.vocalize_master_enabled
+        self.vocalize_master_btn.SetLabel(
+            "Vocalize: ON" if self.vocalize_master_enabled else "Vocalize: OFF"
+        )
+        self._save_default_setting("vocalize_master", self.vocalize_master_enabled)
+        self.set_status(
+            "Vocalize enabled" if self.vocalize_master_enabled else "Vocalize disabled"
+        )
+
+    def on_interval_change(self, _event: wx.CommandEvent) -> None:
+        self.poll_seconds = int(self.interval_ctrl.GetValue())
+        self._save_default_setting("poll_interval_seconds", self.poll_seconds)
+        self.set_status(f"Polling interval set to {self.poll_seconds}s")
+
+    def _save_default_setting(self, key: str, value: Any) -> None:
+        defaults = self.layout_config.setdefault("defaults", {})
+        defaults[key] = value
+        with LAYOUT_PATH.open("w", encoding="utf-8") as file:
+            json.dump(self.layout_config, file, indent=2)
+            file.write("\n")
 
     def _request_stop(self) -> None:
         self._stop_event.set()
@@ -503,7 +553,7 @@ class OwletMonitorFrame(wx.Frame):
             try:
                 dt = datetime.fromtimestamp(int(value))
                 age = self._human_age(now - dt)
-                return f"{dt.strftime('%H:%M:%S')} {age}"
+                return f"{age}\n{dt.strftime('%H:%M:%S')}"
             except (ValueError, TypeError, OSError):
                 return str(value)
         if value_type == "refreshed_age_seconds":

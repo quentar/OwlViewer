@@ -4,7 +4,9 @@
   "defaults": {
     "history_size": 30,
     "vocalize": true,
-    "chart": false
+    "chart": false,
+    "poll_interval_seconds": 10,
+    "vocalize_master": false
   },
   "boxes": [
     {"property": "heart_rate", "label": "Heart Rate", "type": "bpm", "chart": true},
