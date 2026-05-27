@@ -207,10 +207,16 @@ class OwletMonitorFrame(wx.Frame):
         title = str(self.layout_config.get("title", "Owlet Monitor"))
         super().__init__(parent=None, title=title, size=(1120, 820))
 
-        panel = wx.Panel(self)
-        self.status = wx.StaticText(panel, label="Idle")
-        self.start_btn = wx.Button(panel, label="Start")
-        self.stop_btn = wx.Button(panel, label="Stop")
+        root_panel = wx.Panel(self)
+        self.notebook = wx.Notebook(root_panel)
+        monitor_panel = wx.Panel(self.notebook)
+        settings_panel = wx.Panel(self.notebook)
+        self.notebook.AddPage(monitor_panel, "Monitor")
+        self.notebook.AddPage(settings_panel, "Settings")
+
+        self.status = wx.StaticText(monitor_panel, label="Idle")
+        self.start_btn = wx.Button(monitor_panel, label="Start")
+        self.stop_btn = wx.Button(monitor_panel, label="Stop")
         self.stop_btn.Disable()
 
         self.tiles: dict[str, MetricTile] = {}
@@ -234,6 +240,7 @@ class OwletMonitorFrame(wx.Frame):
         self.vocalize_master_enabled = bool(defaults.get("vocalize_master", False))
         self.vocalization_engine = str(defaults.get("vocalization_engine", "macos_say"))
         self.vocalization_interval_seconds = int(defaults.get("vocalization_interval_seconds", 10))
+        self.reconnect_stale_seconds = int(defaults.get("reconnect_stale_seconds", 180))
         self._last_vocalized_at: dict[str, float] = {}
         self._speech_queue: queue.Queue[str] = queue.Queue()
         self._speech_stop_event = threading.Event()
@@ -241,14 +248,14 @@ class OwletMonitorFrame(wx.Frame):
         self._speech_thread.start()
 
         self.vocalize_master_btn = wx.Button(
-            panel,
+            monitor_panel,
             label="Vocalize: ON" if self.vocalize_master_enabled else "Vocalize: OFF",
         )
-        self.interval_label = wx.StaticText(panel, label="Interval (s):")
-        self.interval_ctrl = wx.SpinCtrl(panel, min=1, max=300, initial=self.poll_seconds)
-        self.vocal_interval_label = wx.StaticText(panel, label="Vocal Int (s):")
-        self.vocal_interval_ctrl = wx.SpinCtrl(panel, min=1, max=3600, initial=self.vocalization_interval_seconds)
-        self.alarm_test_btn = wx.Button(panel, label="Alarm Test")
+        self.interval_label = wx.StaticText(monitor_panel, label="Interval (s):")
+        self.interval_ctrl = wx.SpinCtrl(monitor_panel, min=1, max=300, initial=self.poll_seconds)
+        self.vocal_interval_label = wx.StaticText(monitor_panel, label="Vocal Int (s):")
+        self.vocal_interval_ctrl = wx.SpinCtrl(monitor_panel, min=1, max=3600, initial=self.vocalization_interval_seconds)
+        self.alarm_test_btn = wx.Button(monitor_panel, label="Alarm Test")
 
         button_row = wx.BoxSizer(wx.HORIZONTAL)
         button_row.Add(self.start_btn, flag=wx.RIGHT, border=8)
@@ -272,7 +279,7 @@ class OwletMonitorFrame(wx.Frame):
             chart_enabled = bool(box.get("chart", self.default_chart))
             tile_vocalize_default = bool(box.get("vocalize", self.default_vocalize))
             tile = MetricTile(
-                panel,
+                monitor_panel,
                 label=label,
                 alerts=alerts,
                 default_vocalize=tile_vocalize_default,
@@ -290,11 +297,89 @@ class OwletMonitorFrame(wx.Frame):
             )
             self.tiles_grid.Add(tile, proportion=1, flag=wx.EXPAND)
 
-        layout = wx.BoxSizer(wx.VERTICAL)
-        layout.Add(self.status, flag=wx.ALL | wx.EXPAND, border=10)
-        layout.Add(button_row, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=10)
-        layout.Add(self.tiles_grid, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
-        panel.SetSizer(layout)
+        monitor_layout = wx.BoxSizer(wx.VERTICAL)
+        monitor_layout.Add(self.status, flag=wx.ALL | wx.EXPAND, border=10)
+        monitor_layout.Add(button_row, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=10)
+        monitor_layout.Add(self.tiles_grid, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
+        monitor_panel.SetSizer(monitor_layout)
+
+        self.settings_poll_ctrl = wx.SpinCtrl(settings_panel, min=1, max=300, initial=self.poll_seconds)
+        self.settings_vocal_interval_ctrl = wx.SpinCtrl(
+            settings_panel, min=1, max=3600, initial=self.vocalization_interval_seconds
+        )
+        self.settings_reconnect_ctrl = wx.SpinCtrl(
+            settings_panel, min=10, max=3600, initial=self.reconnect_stale_seconds
+        )
+        self.settings_engine_ctrl = wx.Choice(settings_panel, choices=["macos_say", "none"])
+        self.settings_engine_ctrl.SetStringSelection(
+            self.vocalization_engine if self.vocalization_engine in {"macos_say", "none"} else "macos_say"
+        )
+        self.settings_master_cb = wx.CheckBox(settings_panel, label="Global Vocalize Enabled")
+        self.settings_master_cb.SetValue(self.vocalize_master_enabled)
+        self.settings_apply_btn = wx.Button(settings_panel, label="Apply Settings")
+
+        settings_grid = wx.FlexGridSizer(10, 2, 6, 10)
+        settings_grid.Add(wx.StaticText(settings_panel, label="Poll Interval (s):"), flag=wx.ALIGN_CENTER_VERTICAL)
+        settings_grid.Add(self.settings_poll_ctrl, flag=wx.EXPAND)
+        settings_grid.Add(wx.StaticText(settings_panel, label=""), flag=wx.EXPAND)
+        settings_grid.Add(
+            wx.StaticText(
+                settings_panel,
+                label="How often API data is fetched. Lower = faster updates, more network traffic.",
+            ),
+            flag=wx.EXPAND,
+        )
+        settings_grid.Add(wx.StaticText(settings_panel, label="Vocal Interval (s):"), flag=wx.ALIGN_CENTER_VERTICAL)
+        settings_grid.Add(self.settings_vocal_interval_ctrl, flag=wx.EXPAND)
+        settings_grid.Add(wx.StaticText(settings_panel, label=""), flag=wx.EXPAND)
+        settings_grid.Add(
+            wx.StaticText(
+                settings_panel,
+                label="Gap between non-alert spoken updates for each enabled tile.",
+            ),
+            flag=wx.EXPAND,
+        )
+        settings_grid.Add(wx.StaticText(settings_panel, label="Reconnect Stale (s):"), flag=wx.ALIGN_CENTER_VERTICAL)
+        settings_grid.Add(self.settings_reconnect_ctrl, flag=wx.EXPAND)
+        settings_grid.Add(wx.StaticText(settings_panel, label=""), flag=wx.EXPAND)
+        settings_grid.Add(
+            wx.StaticText(
+                settings_panel,
+                label="If 'Last Refreshed' age exceeds this, monitor reconnects automatically.",
+            ),
+            flag=wx.EXPAND,
+        )
+        settings_grid.Add(wx.StaticText(settings_panel, label="Vocalization Engine:"), flag=wx.ALIGN_CENTER_VERTICAL)
+        settings_grid.Add(self.settings_engine_ctrl, flag=wx.EXPAND)
+        settings_grid.Add(wx.StaticText(settings_panel, label=""), flag=wx.EXPAND)
+        settings_grid.Add(
+            wx.StaticText(
+                settings_panel,
+                label="Speech backend. 'macos_say' uses macOS voice; 'none' disables speech output.",
+            ),
+            flag=wx.EXPAND,
+        )
+        settings_grid.Add(wx.StaticText(settings_panel, label="Vocalize Master:"), flag=wx.ALIGN_CENTER_VERTICAL)
+        settings_grid.Add(self.settings_master_cb, flag=wx.ALIGN_CENTER_VERTICAL)
+        settings_grid.Add(wx.StaticText(settings_panel, label=""), flag=wx.EXPAND)
+        settings_grid.Add(
+            wx.StaticText(
+                settings_panel,
+                label="Global speech gate for non-alert messages. Active alerts can still speak.",
+            ),
+            flag=wx.EXPAND,
+        )
+        settings_grid.AddGrowableCol(1, 1)
+
+        settings_layout = wx.BoxSizer(wx.VERTICAL)
+        settings_layout.Add(settings_grid, flag=wx.ALL | wx.EXPAND, border=16)
+        settings_layout.Add(self.settings_apply_btn, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=16)
+        settings_layout.AddStretchSpacer(1)
+        settings_panel.SetSizer(settings_layout)
+
+        root_layout = wx.BoxSizer(wx.VERTICAL)
+        root_layout.Add(self.notebook, proportion=1, flag=wx.EXPAND)
+        root_panel.SetSizer(root_layout)
 
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -311,6 +396,7 @@ class OwletMonitorFrame(wx.Frame):
         self.interval_ctrl.Bind(wx.EVT_SPINCTRL, self.on_interval_change)
         self.vocal_interval_ctrl.Bind(wx.EVT_SPINCTRL, self.on_vocal_interval_change)
         self.alarm_test_btn.Bind(wx.EVT_BUTTON, self.on_alarm_test)
+        self.settings_apply_btn.Bind(wx.EVT_BUTTON, self.on_apply_settings_tab)
         self.Bind(wx.EVT_CLOSE, self.on_close)
         self.Bind(wx.EVT_SIZE, self._on_resize)
         self._reflow_grid()
@@ -358,6 +444,7 @@ class OwletMonitorFrame(wx.Frame):
         self.vocalize_master_btn.SetLabel(
             "Vocalize: ON" if self.vocalize_master_enabled else "Vocalize: OFF"
         )
+        self.settings_master_cb.SetValue(self.vocalize_master_enabled)
         self._save_default_setting("vocalize_master", self.vocalize_master_enabled)
         self.set_status(
             "Vocalize enabled" if self.vocalize_master_enabled else "Vocalize disabled"
@@ -365,11 +452,13 @@ class OwletMonitorFrame(wx.Frame):
 
     def on_interval_change(self, _event: wx.CommandEvent) -> None:
         self.poll_seconds = int(self.interval_ctrl.GetValue())
+        self.settings_poll_ctrl.SetValue(self.poll_seconds)
         self._save_default_setting("poll_interval_seconds", self.poll_seconds)
         self.set_status(f"Polling interval set to {self.poll_seconds}s")
 
     def on_vocal_interval_change(self, _event: wx.CommandEvent) -> None:
         self.vocalization_interval_seconds = int(self.vocal_interval_ctrl.GetValue())
+        self.settings_vocal_interval_ctrl.SetValue(self.vocalization_interval_seconds)
         self._save_default_setting("vocalization_interval_seconds", self.vocalization_interval_seconds)
         self.set_status(f"Vocalization interval set to {self.vocalization_interval_seconds}s")
 
@@ -381,6 +470,26 @@ class OwletMonitorFrame(wx.Frame):
             self.flash_timer.Start(500)
         self._apply_alert_backgrounds()
         self.set_status("Alarm test sent")
+
+    def on_apply_settings_tab(self, _event: wx.CommandEvent) -> None:
+        self.poll_seconds = int(self.settings_poll_ctrl.GetValue())
+        self.vocalization_interval_seconds = int(self.settings_vocal_interval_ctrl.GetValue())
+        self.reconnect_stale_seconds = int(self.settings_reconnect_ctrl.GetValue())
+        self.vocalization_engine = str(self.settings_engine_ctrl.GetStringSelection())
+        self.vocalize_master_enabled = bool(self.settings_master_cb.GetValue())
+
+        self.interval_ctrl.SetValue(self.poll_seconds)
+        self.vocal_interval_ctrl.SetValue(self.vocalization_interval_seconds)
+        self.vocalize_master_btn.SetLabel(
+            "Vocalize: ON" if self.vocalize_master_enabled else "Vocalize: OFF"
+        )
+
+        self._save_default_setting("poll_interval_seconds", self.poll_seconds)
+        self._save_default_setting("vocalization_interval_seconds", self.vocalization_interval_seconds)
+        self._save_default_setting("reconnect_stale_seconds", self.reconnect_stale_seconds)
+        self._save_default_setting("vocalization_engine", self.vocalization_engine)
+        self._save_default_setting("vocalize_master", self.vocalize_master_enabled)
+        self.set_status("Settings updated")
 
     def on_tile_vocalize_change(self, _event: wx.CommandEvent, prop: str) -> None:
         self.box_config[prop]["vocalize"] = self.tiles[prop].is_vocalize_enabled()
@@ -420,33 +529,49 @@ class OwletMonitorFrame(wx.Frame):
             wx.CallAfter(self.stop_btn.Disable)
 
     async def _monitor_loop(self) -> None:
-        api: OwletAPI | None = None
-        try:
-            config = self._load_login_config()
-            wx.CallAfter(self.set_status, "Authenticating...")
-            api = OwletAPI(config["region"], config["username"], config["password"])
-            await api.authenticate()
-            devices = await api.get_devices()
-            socks = {device["device"]["dsn"]: Sock(api, device["device"]) for device in devices["response"]}
-            if not socks:
-                raise OwletError("No devices found")
+        config = self._load_login_config()
+        while not self._stop_event.is_set():
+            api: OwletAPI | None = None
+            try:
+                wx.CallAfter(self.set_status, "Authenticating...")
+                api = OwletAPI(config["region"], config["username"], config["password"])
+                await api.authenticate()
+                devices = await api.get_devices()
+                socks = {device["device"]["dsn"]: Sock(api, device["device"]) for device in devices["response"]}
+                if not socks:
+                    raise OwletError("No devices found")
 
-            wx.CallAfter(self.set_status, f"Running ({len(socks)} device(s), polling every {self.poll_seconds}s)")
-            while not self._stop_event.is_set():
-                props = await self._poll_once(socks)
-                wx.CallAfter(self._apply_metrics, props)
-                for _ in range(self.poll_seconds):
-                    if self._stop_event.is_set():
+                wx.CallAfter(self.set_status, f"Running ({len(socks)} device(s), polling every {self.poll_seconds}s)")
+                reconnect_needed = False
+                while not self._stop_event.is_set():
+                    props = await self._poll_once(socks)
+                    wx.CallAfter(self._apply_metrics, props)
+                    stale_age = self._last_updated_age_seconds(props)
+                    if stale_age is not None and stale_age > self.reconnect_stale_seconds:
+                        reconnect_needed = True
+                        wx.CallAfter(
+                            self.set_status,
+                            f"Last refresh stale ({stale_age}s > {self.reconnect_stale_seconds}s). Reconnecting...",
+                        )
                         break
-                    await asyncio.sleep(1)
+                    for _ in range(self.poll_seconds):
+                        if self._stop_event.is_set():
+                            break
+                        await asyncio.sleep(1)
 
-        except (OwletError, KeyError, FileNotFoundError, json.JSONDecodeError, ValueError) as err:
-            wx.CallAfter(self.set_error, str(err))
-        finally:
-            if api is not None:
-                await api.close()
-            wx.CallAfter(self.start_btn.Enable)
-            wx.CallAfter(self.stop_btn.Disable)
+                if reconnect_needed and not self._stop_event.is_set():
+                    await asyncio.sleep(2)
+
+            except (OwletError, KeyError, FileNotFoundError, json.JSONDecodeError, ValueError) as err:
+                wx.CallAfter(self.set_status, f"Monitor error: {err}. Retrying...")
+                if not self._stop_event.is_set():
+                    await asyncio.sleep(3)
+            finally:
+                if api is not None:
+                    await api.close()
+
+        wx.CallAfter(self.start_btn.Enable)
+        wx.CallAfter(self.stop_btn.Disable)
 
     def _load_login_config(self) -> dict[str, str]:
         login_path = PROJECT_ROOT / "login.json"
@@ -461,6 +586,16 @@ class OwletMonitorFrame(wx.Frame):
         first_sock = next(iter(socks.values()))
         result = await first_sock.update_properties()
         return result["properties"]
+
+    def _last_updated_age_seconds(self, props: dict[str, Any]) -> int | None:
+        raw = props.get("last_updated")
+        if not raw:
+            return None
+        try:
+            dt = datetime.strptime(str(raw), "%Y/%m/%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            return max(int((datetime.now(timezone.utc) - dt).total_seconds()), 0)
+        except ValueError:
+            return None
 
     def _apply_metrics(self, props: dict[str, Any]) -> None:
         previous_levels = dict(self._current_levels)

@@ -8,7 +8,8 @@
     "poll_interval_seconds": 11,
     "vocalize_master": true,
     "vocalization_engine": "macos_say",
-    "vocalization_interval_seconds": 30
+    "vocalization_interval_seconds": 30,
+    "reconnect_stale_seconds": 180
   },
   "boxes": [
     {
@@ -39,7 +40,7 @@
       "property": "oxygen_saturation",
       "label": "Oxygen Saturation",
       "type": "percent",
-      "vocalize": true,
+      "vocalize": false,
       "vocalization_short": "Oxygen",
       "vocalization_priority": 1,
       "chart": true,
