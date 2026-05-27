@@ -2,14 +2,24 @@
   "title": "Owlet Live Monitor",
   "poll_seconds": 10,
   "boxes": [
-    {"property": "heart_rate", "label": "Heart Rate", "width": 280, "height": 150},
-    {"property": "oxygen_saturation", "label": "Oxygen Saturation", "width": 280, "height": 150},
-    {"property": "oxygen_10_av", "label": "Oxygen 10m Avg", "width": 280, "height": 150},
-    {"property": "battery_percentage", "label": "Battery %", "width": 220, "height": 140},
-    {"property": "battery_minutes", "label": "Battery Minutes", "width": 280, "height": 140},
-    {"property": "movement", "label": "Movement", "width": 220, "height": 140},
-    {"property": "skin_temperature", "label": "Skin Temp", "width": 220, "height": 140},
-    {"property": "monitoring_start_time", "label": "Monitoring Start", "width": 340, "height": 140},
-    {"property": "last_updated", "label": "Last Updated", "width": 340, "height": 140}
+    {"property": "heart_rate", "label": "Heart Rate", "type": "bpm", "width": 280, "height": 150},
+    {
+      "property": "oxygen_saturation",
+      "label": "Oxygen Saturation",
+      "type": "percent",
+      "width": 280,
+      "height": 150,
+      "alerts": [
+        {"name": "yellow", "when": "below", "threshold": 94, "consecutive": 3},
+        {"name": "red", "when": "below", "threshold": 94, "consecutive": 5, "flash": true}
+      ]
+    },
+    {"property": "oxygen_10_av", "label": "Oxygen 10m Avg", "type": "percent", "width": 280, "height": 150},
+    {"property": "battery_percentage", "label": "Battery", "type": "percent", "width": 220, "height": 140},
+    {"property": "battery_minutes", "label": "Battery Time", "type": "minutes_duration", "width": 280, "height": 140},
+    {"property": "movement", "label": "Movement", "type": "int", "width": 220, "height": 140},
+    {"property": "skin_temperature", "label": "Skin Temp", "type": "int", "width": 220, "height": 140},
+    {"property": "monitoring_start_time", "label": "Monitoring Start", "type": "epoch_with_age", "width": 420, "height": 170},
+    {"property": "last_updated", "label": "Last Refreshed", "type": "refreshed_age_seconds", "width": 420, "height": 170}
   ]
 }
