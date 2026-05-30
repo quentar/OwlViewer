@@ -15,10 +15,10 @@
     "start_after_launch": true,
     "start_maximized": true,
     "big_box_value_font_boost": 3,
-    "window_x": 15,
-    "window_y": 41,
-    "window_w": 1668,
-    "window_h": 1001,
+    "window_x": 4,
+    "window_y": 39,
+    "window_w": 1710,
+    "window_h": 1013,
     "night_mode": false,
     "night_colors": false,
     "big_width_scale": 1.45,
@@ -112,6 +112,16 @@
       "row": 2
     },
     {
+      "property": "reading_quality",
+      "label": "Reading Quality",
+      "type": "reading_quality_state",
+      "size_class": "compact",
+      "vocalize": false,
+      "chart": false,
+      "vocalize_alert": false,
+      "row": 2
+    },
+    {
       "property": "battery_minutes",
       "label": "Battery Time",
       "type": "minutes_duration",
@@ -132,6 +142,7 @@
       "label": "Monitoring Start",
       "type": "epoch_with_age",
       "vocalize_alert": true,
+      "size_class": "compact",
       "row": 3
     },
     {
@@ -139,6 +150,7 @@
       "label": "Last Refreshed",
       "type": "refreshed_age_seconds",
       "vocalize_alert": true,
+      "size_class": "compact",
       "row": 3
     }
   ]

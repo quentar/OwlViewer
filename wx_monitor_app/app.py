@@ -38,6 +38,10 @@ FLASH_RED = wx.Colour(255, 120, 120)
 TEXT_COLOR = wx.Colour(0, 0, 0)
 TITLE_COLOR = wx.Colour(35, 35, 35)
 LINE_COLOR = wx.Colour(35, 117, 255)
+ALERT_TEXT_COLORS = {
+    "yellow": wx.Colour(176, 120, 0),
+    "red": wx.Colour(200, 0, 0),
+}
 
 
 class SparklinePanel(wx.Panel):
@@ -116,10 +120,12 @@ class MetricTile(wx.Panel):
         default_vocalize: bool,
         chart_enabled: bool,
         value_font_boost: float = 1.0,
+        force_large_value: bool = False,
     ) -> None:
         super().__init__(parent)
         self.SetMinSize((180, 150))
         self.value_font_boost = value_font_boost
+        self.force_large_value = force_large_value
         self.text_color = TEXT_COLOR
         self.normal_bg_color = BOX_BACKGROUND_COLOR
         self.SetBackgroundColour(wx.Colour(245, 246, 248))
@@ -143,11 +149,18 @@ class MetricTile(wx.Panel):
         alert_sizer = wx.BoxSizer(wx.VERTICAL)
         for alert in alerts:
             row = wx.BoxSizer(wx.HORIZONTAL)
-            info = wx.StaticText(self.inner, label=self._alert_label(alert))
+            base_label = self._alert_label(alert)
+            info = wx.StaticText(self.inner, label=base_label)
             info.SetForegroundColour(TEXT_COLOR)
             row.Add(info, proportion=1, flag=wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, border=8)
             alert_sizer.Add(row, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
-            self.alert_rows.append({"name": str(alert.get("name", "alert")), "label": info})
+            self.alert_rows.append(
+                {
+                    "name": str(alert.get("name", "alert")).lower(),
+                    "label": info,
+                    "base_label": base_label,
+                }
+            )
 
         self.chart_enabled = chart_enabled
         self.chart: SparklinePanel | None = SparklinePanel(self.inner) if self.chart_enabled else None
@@ -190,14 +203,26 @@ class MetricTile(wx.Panel):
         return f"{name}: {when} {threshold} x{consecutive}"
 
     def set_value(self, value: str, level: str) -> None:
-        display = value if level == "normal" else f"{value} ({level})"
-        self._set_best_font(display)
-        self.value.SetLabel(display)
+        self._set_best_font(value)
+        self.value.SetLabel(value)
         self.Layout()
 
     def set_alert_active_level(self, level: str) -> None:
+        normal_font = wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
+        alert_font = wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
         for row in self.alert_rows:
-            row["label"].SetForegroundColour(self.text_color)
+            label = row["label"]
+            base_label = row["base_label"]
+            if level != "normal" and row["name"] == level:
+                alert_color = ALERT_TEXT_COLORS.get(level, self.text_color)
+                label.SetForegroundColour(alert_color)
+                label.SetFont(alert_font)
+                label.SetLabel(f"⚠ {base_label} ⚠")
+            else:
+                label.SetForegroundColour(self.text_color)
+                label.SetFont(normal_font)
+                label.SetLabel(base_label)
+        self.Layout()
 
     def set_alert_background(self, level: str, flash_on: bool = False) -> None:
         if level == "red" and flash_on:
@@ -221,6 +246,10 @@ class MetricTile(wx.Panel):
         return self.alarm_vocalize_cb.GetValue()
 
     def _set_best_font(self, text: str) -> None:
+        if self.force_large_value:
+            size = max(62, int(78 * self.value_font_boost))
+            self.value.SetFont(wx.Font(size, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+            return
         width = max(self.GetSize().GetWidth() - 24, 120)
         height = max(self.GetSize().GetHeight() - 120, 46)
         start_point = max(int(62 * self.value_font_boost), 62)
@@ -376,6 +405,7 @@ class OwletMonitorFrame(wx.Frame):
             value_font_boost = (
                 self.big_box_value_font_boost if size_class == "big" else float(box.get("value_font_boost", 1.0))
             )
+            force_large_value = bool(box.get("force_large_value", False))
             width_scale, height_scale = self._class_scales(size_class)
             width_scale = float(box.get("width_scale", width_scale))
             height_scale = float(box.get("height_scale", height_scale))
@@ -386,6 +416,7 @@ class OwletMonitorFrame(wx.Frame):
                 default_vocalize=tile_vocalize_default,
                 chart_enabled=chart_enabled,
                 value_font_boost=value_font_boost,
+                force_large_value=force_large_value,
             )
             tile.alarm_vocalize_cb.SetValue(tile_alarm_vocalize_default)
             self.tiles[prop] = tile
@@ -1094,10 +1125,31 @@ class OwletMonitorFrame(wx.Frame):
         return False
 
     def _format_metric(self, prop: str, config: dict[str, Any], value: Any, now: datetime) -> str:
+        value_type = str(config.get("type", "plain"))
+
+        if value_type == "reading_quality_state":
+            charging_raw = self._latest_props.get("charging", 0)
+            base_station_on_raw = self._latest_props.get("base_station_on", 0)
+            readings_flag_raw = self._latest_props.get("readings_flag", 1)
+            oxygen_10_av_raw = self._latest_props.get("oxygen_10_av", 0)
+            charging = int(0 if charging_raw is None else charging_raw)
+            base_station_on = int(0 if base_station_on_raw is None else base_station_on_raw)
+            readings_flag = int(1 if readings_flag_raw is None else readings_flag_raw)
+            oxygen_10_av = int(0 if oxygen_10_av_raw is None else oxygen_10_av_raw)
+            if charging == 1 or base_station_on == 0:
+                return "off_baby"
+            if readings_flag == 0:
+                return "good_signal"
+            if readings_flag == 2:
+                if oxygen_10_av == 255:
+                    return "heavy_motion_signal_lost"
+                return "motion_degraded_signal"
+            if readings_flag == 1:
+                return "no_reading"
+            return "normal"
+
         if value is None:
             return "--"
-
-        value_type = str(config.get("type", "plain"))
 
         if value_type == "bpm":
             return f"{int(float(value))} bpm"
@@ -1129,7 +1181,6 @@ class OwletMonitorFrame(wx.Frame):
             series = self._series.get(prop, [])
             avg = sum(series) / len(series) if series else float(current)
             return f"{current}\navg {avg:.1f}"
-
         return str(value)
 
     def _human_age(self, delta) -> str:
