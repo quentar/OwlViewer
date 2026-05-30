@@ -109,9 +109,11 @@ class MetricTile(wx.Panel):
         alerts: list[dict[str, Any]],
         default_vocalize: bool,
         chart_enabled: bool,
+        value_font_boost: float = 1.0,
     ) -> None:
         super().__init__(parent)
         self.SetMinSize((180, 150))
+        self.value_font_boost = value_font_boost
         self.SetBackgroundColour(wx.Colour(245, 246, 248))
 
         self.inner = wx.Panel(self)
@@ -199,7 +201,8 @@ class MetricTile(wx.Panel):
     def _set_best_font(self, text: str) -> None:
         width = max(self.GetSize().GetWidth() - 24, 120)
         height = max(self.GetSize().GetHeight() - 120, 46)
-        for point in range(62, 14, -1):
+        start_point = max(int(62 * self.value_font_boost), 62)
+        for point in range(start_point, 14, -1):
             font = wx.Font(point, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
             self.value.SetFont(font)
             tw, th = self.value.GetTextExtent(text)
@@ -256,6 +259,7 @@ class OwletMonitorFrame(wx.Frame):
         self.announce_alarm_ended = bool(defaults.get("announce_alarm_ended", True))
         self.start_after_launch = bool(defaults.get("start_after_launch", True))
         self.start_maximized = bool(defaults.get("start_maximized", False))
+        self.big_box_value_font_boost = float(defaults.get("big_box_value_font_boost", 1.55))
         self.window_x = int(defaults.get("window_x", -1))
         self.window_y = int(defaults.get("window_y", -1))
         self.window_w = int(defaults.get("window_w", 1120))
@@ -290,7 +294,7 @@ class OwletMonitorFrame(wx.Frame):
         button_row.AddStretchSpacer(1)
         button_row.Add(self.alarm_test_btn, flag=wx.ALIGN_CENTER_VERTICAL)
 
-        self.tiles_grid = wx.GridSizer(rows=0, cols=1, vgap=8, hgap=8)
+        self.tiles_wrap = wx.WrapSizer(wx.HORIZONTAL)
         for box in self.layout_config["boxes"]:
             prop = str(box["property"])
             label = str(box.get("label", prop))
@@ -298,12 +302,17 @@ class OwletMonitorFrame(wx.Frame):
             chart_enabled = bool(box.get("chart", self.default_chart))
             tile_vocalize_default = bool(box.get("vocalize", self.default_vocalize))
             tile_alarm_vocalize_default = bool(box.get("vocalize_alert", tile_vocalize_default))
+            size_class = str(box.get("size_class", "normal")).lower()
+            value_font_boost = (
+                self.big_box_value_font_boost if size_class == "big" else float(box.get("value_font_boost", 1.0))
+            )
             tile = MetricTile(
                 monitor_panel,
                 label=label,
                 alerts=alerts,
                 default_vocalize=tile_vocalize_default,
                 chart_enabled=chart_enabled,
+                value_font_boost=value_font_boost,
             )
             tile.alarm_vocalize_cb.SetValue(tile_alarm_vocalize_default)
             self.tiles[prop] = tile
@@ -320,12 +329,12 @@ class OwletMonitorFrame(wx.Frame):
                 wx.EVT_CHECKBOX,
                 lambda event, key=prop: self.on_tile_alarm_vocalize_change(event, key),
             )
-            self.tiles_grid.Add(tile, proportion=1, flag=wx.EXPAND)
+            self.tiles_wrap.Add(tile, flag=wx.ALL, border=6)
 
         monitor_layout = wx.BoxSizer(wx.VERTICAL)
         monitor_layout.Add(self.status, flag=wx.ALL | wx.EXPAND, border=10)
         monitor_layout.Add(button_row, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=10)
-        monitor_layout.Add(self.tiles_grid, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
+        monitor_layout.Add(self.tiles_wrap, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
         monitor_panel.SetSizer(monitor_layout)
 
         self.settings_poll_ctrl = wx.SpinCtrl(settings_panel, min=1, max=300, initial=self.poll_seconds)
@@ -916,25 +925,22 @@ class OwletMonitorFrame(wx.Frame):
             return
 
         available = self.monitor_panel.GetClientSize()
-        best_cols = 1
-        best_score = -1.0
-        target_ratio = 1.35
-        for cols in range(1, n + 1):
-            rows = math.ceil(n / cols)
-            cell_w = max((available.width - (cols - 1) * 8 - 40) / cols, 1)
-            cell_h = max((available.height - (rows - 1) * 8 - 130) / rows, 1)
-            area = cell_w * cell_h
-            ratio_penalty = abs((cell_w / cell_h) - target_ratio)
-            score = area - (ratio_penalty * 5000)
-            if score > best_score:
-                best_score = score
-                best_cols = cols
-
-        if best_cols != self._grid_cols:
-            self._grid_cols = best_cols
-            self.tiles_grid.SetCols(best_cols)
-            self.tiles_grid.SetRows(math.ceil(n / best_cols))
-            self.Layout()
+        base_w = max(int((available.width - 80) / 3), 260)
+        base_h = max(int((available.height - 180) / 3), 180)
+        for prop in self.ordered_properties:
+            tile = self.tiles[prop]
+            size_class = str(self.box_config[prop].get("size_class", "normal")).lower()
+            if size_class == "big":
+                w = int(base_w * 1.24)
+                h = int(base_h * 1.36)
+            elif size_class == "compact":
+                w = int(base_w * 0.70)
+                h = int(base_h * 0.58)
+            else:
+                w = base_w
+                h = base_h
+            tile.SetMinSize((max(w, 180), max(h, 100)))
+        self.Layout()
 
     def _evaluate_alert_level(self, config: dict[str, Any], value: Any) -> str:
         alerts = config.get("alerts") or []

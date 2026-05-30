@@ -14,16 +14,18 @@
     "announce_alarm_ended": true,
     "start_after_launch": true,
     "start_maximized": true,
-    "window_x": 6,
-    "window_y": 39,
-    "window_w": 1704,
-    "window_h": 1012
+    "big_box_value_font_boost": 3,
+    "window_x": 14,
+    "window_y": 41,
+    "window_w": 1670,
+    "window_h": 1001
   },
   "boxes": [
     {
       "property": "heart_rate",
       "label": "Heart Rate",
       "type": "bpm",
+      "size_class": "big",
       "chart": true,
       "vocalize": false,
       "vocalization_short": "HR",
@@ -49,6 +51,7 @@
       "property": "oxygen_saturation",
       "label": "Oxygen Saturation",
       "type": "percent",
+      "size_class": "big",
       "vocalize": true,
       "vocalization_short": "Oxygen",
       "vocalization_priority": 1,
@@ -73,12 +76,14 @@
       "property": "oxygen_10_av",
       "label": "Oxygen 10m Avg",
       "type": "percent",
+      "size_class": "big",
       "vocalize_alert": true
     },
     {
       "property": "skin_temperature",
       "label": "Skin Temp",
       "type": "int",
+      "size_class": "compact",
       "vocalize_alert": true
     },
     {
@@ -93,12 +98,14 @@
       "property": "battery_minutes",
       "label": "Battery Time",
       "type": "minutes_duration",
+      "size_class": "compact",
       "vocalize_alert": true
     },
     {
       "property": "battery_percentage",
       "label": "Battery",
       "type": "percent",
+      "size_class": "compact",
       "vocalize_alert": true
     },
     {
