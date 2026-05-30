@@ -289,6 +289,7 @@ class OwletMonitorFrame(wx.Frame):
 
         self._rule_counts: dict[str, dict[str, int]] = {}
         self._current_levels: dict[str, str] = {}
+        self._alert_spoken_active: dict[str, bool] = {}
         self._flashing_keys: set[str] = set()
         self._flash_on = False
         self._latest_props: dict[str, Any] = {}
@@ -416,6 +417,7 @@ class OwletMonitorFrame(wx.Frame):
             self.ordered_properties.append(prop)
             self._rule_counts[prop] = {}
             self._current_levels[prop] = "normal"
+            self._alert_spoken_active[prop] = False
             self._series[prop] = []
             tile.vocalize_cb.Bind(
                 wx.EVT_CHECKBOX,
@@ -939,18 +941,29 @@ class OwletMonitorFrame(wx.Frame):
         if self.vocalization_engine == "none":
             return None
         tile = self.tiles[prop]
+        box = self.box_config[prop]
+        box_announce_alarm_ended = bool(box.get("announce_alarm_ended", self.announce_alarm_ended))
 
         if prev_level in {"yellow", "red"} and level == "normal":
-            if tile.is_alarm_vocalize_enabled() and self.announce_alarm_ended:
+            should_announce_end = self._alert_spoken_active.get(prop, False)
+            self._alert_spoken_active[prop] = False
+            if tile.is_alarm_vocalize_enabled() and box_announce_alarm_ended:
+                if not should_announce_end:
+                    return None
                 self._last_vocalized_at[prop] = time.time()
                 return self._vocalization_back_phrase(prop, value)
             return None
 
         if level in {"yellow", "red"}:
             if not tile.is_alarm_vocalize_enabled():
+                self._alert_spoken_active[prop] = False
+                return None
+            if not self._alert_voice_allowed(prop, level):
+                self._alert_spoken_active[prop] = False
                 return None
             message = self._alert_voice_message(prop, level) or self._vocalization_phrase(prop, value)
             self._last_vocalized_at[prop] = time.time()
+            self._alert_spoken_active[prop] = True
             return message
 
         if not tile.is_vocalize_enabled():
@@ -966,11 +979,37 @@ class OwletMonitorFrame(wx.Frame):
         self._last_vocalized_at[prop] = now_ts
         return message
 
-    def _alert_voice_message(self, prop: str, level: str) -> str | None:
+    def _active_alert_rule(self, prop: str, level: str) -> dict[str, Any] | None:
         alerts = self.box_config[prop].get("alerts") or []
         for rule in alerts:
-            if str(rule.get("name", "")).lower() != level:
-                continue
+            if str(rule.get("name", "")).lower() == level:
+                return rule
+        return None
+
+    def _alert_voice_allowed(self, prop: str, level: str) -> bool:
+        rule = self._active_alert_rule(prop, level)
+        if not rule:
+            return True
+
+        required_props = rule.get("voice_requires_any_active_alerts")
+        if not isinstance(required_props, list) or not required_props:
+            return True
+
+        allowed_levels_raw = rule.get("voice_requires_levels", ["yellow", "red"])
+        if isinstance(allowed_levels_raw, list) and allowed_levels_raw:
+            allowed_levels = {str(item).lower() for item in allowed_levels_raw}
+        else:
+            allowed_levels = {"yellow", "red"}
+
+        for other_prop in required_props:
+            other_level = self._current_levels.get(str(other_prop), "normal")
+            if other_level in allowed_levels:
+                return True
+        return False
+
+    def _alert_voice_message(self, prop: str, level: str) -> str | None:
+        rule = self._active_alert_rule(prop, level)
+        if rule:
             msg = rule.get("voice_message")
             if isinstance(msg, str) and msg.strip():
                 return msg.strip()
@@ -1176,16 +1215,16 @@ class OwletMonitorFrame(wx.Frame):
             readings_flag = int(1 if readings_flag_raw is None else readings_flag_raw)
             oxygen_10_av = int(0 if oxygen_10_av_raw is None else oxygen_10_av_raw)
             if charging == 1 or base_station_on == 0:
-                return "off_baby"
+                return "Sock off"
             if readings_flag == 0:
-                return "good_signal"
+                return "Good signal"
             if readings_flag == 2:
                 if oxygen_10_av == 255:
-                    return "heavy_motion_signal_lost"
-                return "motion_degraded_signal"
+                    return "Heavy motion no signal"
+                return "Motion degraded"
             if readings_flag == 1:
-                return "no_reading"
-            return "normal"
+                return "No reading"
+            return "Normal"
 
         if value is None:
             return "--"

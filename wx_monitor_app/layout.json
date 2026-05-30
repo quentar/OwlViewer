@@ -15,10 +15,10 @@
     "start_after_launch": true,
     "start_maximized": true,
     "big_box_value_font_boost": 3,
-    "window_x": 5,
+    "window_x": 9,
     "window_y": 39,
-    "window_w": 1707,
-    "window_h": 1012,
+    "window_w": 1692,
+    "window_h": 1008,
     "night_mode": false,
     "night_colors": false,
     "big_width_scale": 1.45,
@@ -119,6 +119,7 @@
       "size_class": "compact",
       "vocalize": false,
       "vocalize_alert": true,
+      "announce_alarm_ended": false,
       "row": 2,
       "alerts": [
         {
@@ -126,7 +127,15 @@
           "when": "above",
           "threshold": 75,
           "consecutive": 1,
-          "voice_message": "baby moving"
+          "voice_message": "baby moving",
+          "voice_requires_any_active_alerts": [
+            "oxygen_saturation",
+            "heart_rate"
+          ],
+          "voice_requires_levels": [
+            "yellow",
+            "red"
+          ]
         }
       ]
     },
