@@ -17,7 +17,7 @@
     "big_box_value_font_boost": 3,
     "window_x": 5,
     "window_y": 39,
-    "window_w": 1706,
+    "window_w": 1707,
     "window_h": 1012,
     "night_mode": false,
     "night_colors": false,
@@ -113,13 +113,31 @@
       "height_scale": 1.25
     },
     {
+      "property": "movement_bucket",
+      "label": "Movement Bucket",
+      "type": "int",
+      "size_class": "compact",
+      "vocalize": false,
+      "vocalize_alert": true,
+      "row": 2,
+      "alerts": [
+        {
+          "name": "yellow",
+          "when": "above",
+          "threshold": 75,
+          "consecutive": 1,
+          "voice_message": "baby moving"
+        }
+      ]
+    },
+    {
       "property": "reading_quality",
       "label": "Reading Quality",
       "type": "reading_quality_state",
       "size_class": "compact",
       "vocalize": false,
       "chart": false,
-      "vocalize_alert": false,
+      "vocalize_alert": true,
       "row": 2
     },
     {
@@ -136,7 +154,7 @@
       "type": "percent",
       "size_class": "compact",
       "vocalize_alert": true,
-      "row": 2
+      "row": 3
     },
     {
       "property": "monitoring_start_time",

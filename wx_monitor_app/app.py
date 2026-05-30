@@ -295,6 +295,8 @@ class OwletMonitorFrame(wx.Frame):
         self._series: dict[str, list[float]] = {}
         self._alarm_test_until: float = 0.0
         self._last_reconnect_utc: datetime | None = None
+        self._connection_started_utc: datetime | None = None
+        self._last_connection_duration_seconds: int | None = None
         self._successful_requests_since_reconnect = 0
         self._successful_requests_total = 0
 
@@ -332,10 +334,6 @@ class OwletMonitorFrame(wx.Frame):
             monitor_panel,
             label="Vocalize: ON" if self.vocalize_master_enabled else "Vocalize: OFF",
         )
-        self.interval_label = wx.StaticText(monitor_panel, label="Interval (s):")
-        self.interval_ctrl = wx.SpinCtrl(monitor_panel, min=1, max=300, initial=self.poll_seconds)
-        self.vocal_interval_label = wx.StaticText(monitor_panel, label="Vocal Int (s):")
-        self.vocal_interval_ctrl = wx.SpinCtrl(monitor_panel, min=1, max=3600, initial=self.vocalization_interval_seconds)
         self.alarm_test_btn = wx.Button(monitor_panel, label="Alarm Test")
         self.night_colors_btn = wx.Button(
             monitor_panel,
@@ -347,12 +345,6 @@ class OwletMonitorFrame(wx.Frame):
         button_row.Add(self.stop_btn)
         button_row.AddSpacer(12)
         button_row.Add(self.vocalize_master_btn)
-        button_row.AddSpacer(12)
-        button_row.Add(self.interval_label, flag=wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, border=6)
-        button_row.Add(self.interval_ctrl, flag=wx.ALIGN_CENTER_VERTICAL)
-        button_row.AddSpacer(12)
-        button_row.Add(self.vocal_interval_label, flag=wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, border=6)
-        button_row.Add(self.vocal_interval_ctrl, flag=wx.ALIGN_CENTER_VERTICAL)
         button_row.AddSpacer(12)
         button_row.Add(self.night_colors_btn, flag=wx.ALIGN_CENTER_VERTICAL)
         button_row.AddStretchSpacer(1)
@@ -476,12 +468,20 @@ class OwletMonitorFrame(wx.Frame):
         self.settings_start_after_launch_cb.SetValue(self.start_after_launch)
         self.settings_start_maximized_cb = wx.CheckBox(settings_panel, label="Start Maximized")
         self.settings_start_maximized_cb.SetValue(self.start_maximized)
+        self.settings_show_debug_cb = wx.CheckBox(settings_panel, label="Show Debug Settings")
+        self.settings_show_debug_cb.SetValue(False)
         self.settings_apply_btn = wx.Button(settings_panel, label="Apply Settings")
         self.debug_reconnect_label = wx.StaticText(settings_panel, label="Last Reconnection: never")
+        self.debug_prev_connection_label = wx.StaticText(settings_panel, label="Previous Connection Duration: n/a")
         self.debug_success_since_label = wx.StaticText(settings_panel, label="Successful Requests (since reconnect): 0")
         self.debug_success_total_label = wx.StaticText(settings_panel, label="Successful Requests (total): 0")
+        self.debug_raw_output = wx.TextCtrl(
+            settings_panel,
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP | wx.HSCROLL,
+            size=(-1, 180),
+        )
 
-        settings_grid = wx.FlexGridSizer(18, 2, 6, 10)
+        settings_grid = wx.FlexGridSizer(20, 2, 6, 10)
         settings_grid.Add(wx.StaticText(settings_panel, label="Poll Interval (s):"), flag=wx.ALIGN_CENTER_VERTICAL)
         settings_grid.Add(self.settings_poll_ctrl, flag=wx.EXPAND)
         settings_grid.Add(wx.StaticText(settings_panel, label=""), flag=wx.EXPAND)
@@ -577,11 +577,18 @@ class OwletMonitorFrame(wx.Frame):
         settings_layout = wx.BoxSizer(wx.VERTICAL)
         settings_layout.Add(settings_grid, flag=wx.ALL | wx.EXPAND, border=16)
         settings_layout.Add(self.settings_apply_btn, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=16)
-        settings_layout.Add(wx.StaticLine(settings_panel), flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=16)
-        settings_layout.Add(wx.StaticText(settings_panel, label="Debug Info"), flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=16)
-        settings_layout.Add(self.debug_reconnect_label, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=16)
-        settings_layout.Add(self.debug_success_since_label, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=16)
-        settings_layout.Add(self.debug_success_total_label, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=16)
+        settings_layout.Add(self.settings_show_debug_cb, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=16)
+
+        self.debug_section = wx.BoxSizer(wx.VERTICAL)
+        self.debug_section.Add(wx.StaticLine(settings_panel), flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=0)
+        self.debug_section.Add(wx.StaticText(settings_panel, label="Debug Info"), flag=wx.TOP | wx.BOTTOM, border=8)
+        self.debug_section.Add(self.debug_reconnect_label, flag=wx.BOTTOM, border=6)
+        self.debug_section.Add(self.debug_prev_connection_label, flag=wx.BOTTOM, border=6)
+        self.debug_section.Add(self.debug_success_since_label, flag=wx.BOTTOM, border=6)
+        self.debug_section.Add(self.debug_success_total_label, flag=wx.BOTTOM, border=6)
+        self.debug_section.Add(wx.StaticText(settings_panel, label="Last Raw Output"), flag=wx.TOP | wx.BOTTOM, border=6)
+        self.debug_section.Add(self.debug_raw_output, flag=wx.EXPAND)
+        settings_layout.Add(self.debug_section, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=16)
         settings_layout.AddStretchSpacer(1)
         settings_panel.SetSizer(settings_layout)
 
@@ -601,8 +608,9 @@ class OwletMonitorFrame(wx.Frame):
         self.start_btn.Bind(wx.EVT_BUTTON, self.on_start)
         self.stop_btn.Bind(wx.EVT_BUTTON, self.on_stop)
         self.vocalize_master_btn.Bind(wx.EVT_BUTTON, self.on_toggle_vocalize_master)
-        self.interval_ctrl.Bind(wx.EVT_SPINCTRL, self.on_interval_change)
-        self.vocal_interval_ctrl.Bind(wx.EVT_SPINCTRL, self.on_vocal_interval_change)
+        self.settings_poll_ctrl.Bind(wx.EVT_SPINCTRL, self.on_interval_change)
+        self.settings_vocal_interval_ctrl.Bind(wx.EVT_SPINCTRL, self.on_vocal_interval_change)
+        self.settings_show_debug_cb.Bind(wx.EVT_CHECKBOX, self.on_toggle_debug_settings)
         self.night_colors_btn.Bind(wx.EVT_BUTTON, self.on_toggle_night_colors)
         self.alarm_test_btn.Bind(wx.EVT_BUTTON, self.on_alarm_test)
         self.settings_apply_btn.Bind(wx.EVT_BUTTON, self.on_apply_settings_tab)
@@ -610,6 +618,7 @@ class OwletMonitorFrame(wx.Frame):
         self.Bind(wx.EVT_SIZE, self._on_resize)
         self.Bind(wx.EVT_MOVE, self._on_move)
         self._apply_night_colors()
+        self._set_debug_visibility(self.settings_show_debug_cb.GetValue())
         self._reflow_grid()
         wx.CallAfter(self._apply_initial_window_state)
         if self.start_after_launch:
@@ -675,16 +684,21 @@ class OwletMonitorFrame(wx.Frame):
         )
 
     def on_interval_change(self, _event: wx.CommandEvent) -> None:
-        self.poll_seconds = int(self.interval_ctrl.GetValue())
-        self.settings_poll_ctrl.SetValue(self.poll_seconds)
+        self.poll_seconds = int(self.settings_poll_ctrl.GetValue())
         self._save_default_setting("poll_interval_seconds", self.poll_seconds)
         self.set_status(f"Polling interval set to {self.poll_seconds}s")
 
     def on_vocal_interval_change(self, _event: wx.CommandEvent) -> None:
-        self.vocalization_interval_seconds = int(self.vocal_interval_ctrl.GetValue())
-        self.settings_vocal_interval_ctrl.SetValue(self.vocalization_interval_seconds)
+        self.vocalization_interval_seconds = int(self.settings_vocal_interval_ctrl.GetValue())
         self._save_default_setting("vocalization_interval_seconds", self.vocalization_interval_seconds)
         self.set_status(f"Vocalization interval set to {self.vocalization_interval_seconds}s")
+
+    def on_toggle_debug_settings(self, _event: wx.CommandEvent) -> None:
+        self._set_debug_visibility(self.settings_show_debug_cb.GetValue())
+
+    def _set_debug_visibility(self, visible: bool) -> None:
+        self.debug_section.ShowItems(visible)
+        self.notebook.GetPage(1).Layout()
 
     def on_toggle_night_colors(self, _event: wx.CommandEvent) -> None:
         self.night_colors_enabled = not self.night_colors_enabled
@@ -709,8 +723,6 @@ class OwletMonitorFrame(wx.Frame):
 
         self.monitor_panel.SetBackgroundColour(page_bg)
         self.status.SetForegroundColour(text_color)
-        self.interval_label.SetForegroundColour(text_color)
-        self.vocal_interval_label.SetForegroundColour(text_color)
 
         for tile in self.tiles.values():
             tile.apply_colors(text_color, box_bg_color)
@@ -738,8 +750,8 @@ class OwletMonitorFrame(wx.Frame):
         self.start_after_launch = bool(self.settings_start_after_launch_cb.GetValue())
         self.start_maximized = bool(self.settings_start_maximized_cb.GetValue())
 
-        self.interval_ctrl.SetValue(self.poll_seconds)
-        self.vocal_interval_ctrl.SetValue(self.vocalization_interval_seconds)
+        self.settings_poll_ctrl.SetValue(self.poll_seconds)
+        self.settings_vocal_interval_ctrl.SetValue(self.vocalization_interval_seconds)
         self.vocalize_master_btn.SetLabel(
             "Vocalize: ON" if self.vocalize_master_enabled else "Vocalize: OFF"
         )
@@ -818,6 +830,7 @@ class OwletMonitorFrame(wx.Frame):
                 if not socks:
                     raise OwletError("No devices found")
                 self._last_reconnect_utc = datetime.now(timezone.utc)
+                self._connection_started_utc = self._last_reconnect_utc
                 self._successful_requests_since_reconnect = 0
                 wx.CallAfter(self._update_debug_info_labels)
 
@@ -843,6 +856,12 @@ class OwletMonitorFrame(wx.Frame):
                         await asyncio.sleep(1)
 
                 if reconnect_needed and not self._stop_event.is_set():
+                    if self._connection_started_utc is not None:
+                        self._last_connection_duration_seconds = max(
+                            int((datetime.now(timezone.utc) - self._connection_started_utc).total_seconds()),
+                            0,
+                        )
+                        wx.CallAfter(self._update_debug_info_labels)
                     await asyncio.sleep(2)
 
             except (OwletError, KeyError, FileNotFoundError, json.JSONDecodeError, ValueError) as err:
@@ -883,6 +902,7 @@ class OwletMonitorFrame(wx.Frame):
     def _apply_metrics(self, props: dict[str, Any]) -> None:
         previous_levels = dict(self._current_levels)
         self._latest_props = props
+        self._update_debug_raw_output(props)
         now = datetime.now()
         speak_items: list[tuple[int, int, str]] = []
         for idx, prop in enumerate(self.ordered_properties):
@@ -929,7 +949,7 @@ class OwletMonitorFrame(wx.Frame):
         if level in {"yellow", "red"}:
             if not tile.is_alarm_vocalize_enabled():
                 return None
-            message = self._vocalization_phrase(prop, value)
+            message = self._alert_voice_message(prop, level) or self._vocalization_phrase(prop, value)
             self._last_vocalized_at[prop] = time.time()
             return message
 
@@ -945,6 +965,16 @@ class OwletMonitorFrame(wx.Frame):
         message = self._vocalization_phrase(prop, value)
         self._last_vocalized_at[prop] = now_ts
         return message
+
+    def _alert_voice_message(self, prop: str, level: str) -> str | None:
+        alerts = self.box_config[prop].get("alerts") or []
+        for rule in alerts:
+            if str(rule.get("name", "")).lower() != level:
+                continue
+            msg = rule.get("voice_message")
+            if isinstance(msg, str) and msg.strip():
+                return msg.strip()
+        return None
 
     def _vocalization_phrase(self, prop: str, value: Any) -> str:
         box = self.box_config[prop]
@@ -1042,12 +1072,21 @@ class OwletMonitorFrame(wx.Frame):
             age_seconds = max(int((datetime.now(timezone.utc) - self._last_reconnect_utc).total_seconds()), 0)
             reconnect_text = f"{self._last_reconnect_utc.strftime('%Y/%m/%d %H:%M:%S')} UTC ({age_seconds}s ago)"
         self.debug_reconnect_label.SetLabel(f"Last Reconnection: {reconnect_text}")
+        if self._last_connection_duration_seconds is None:
+            prev_conn_text = "n/a"
+        else:
+            prev_conn_text = self._human_age_seconds(self._last_connection_duration_seconds)
+        self.debug_prev_connection_label.SetLabel(f"Previous Connection Duration: {prev_conn_text}")
         self.debug_success_since_label.SetLabel(
             f"Successful Requests (since reconnect): {self._successful_requests_since_reconnect}"
         )
         self.debug_success_total_label.SetLabel(
             f"Successful Requests (total): {self._successful_requests_total}"
         )
+
+    def _update_debug_raw_output(self, props: dict[str, Any]) -> None:
+        lines = [f"{key}: {props[key]}" for key in sorted(props.keys())]
+        self.debug_raw_output.SetValue("\n".join(lines))
 
     def _refresh_dynamic_display(self, now: datetime) -> None:
         for prop in self.ordered_properties:
@@ -1185,6 +1224,10 @@ class OwletMonitorFrame(wx.Frame):
 
     def _human_age(self, delta) -> str:
         seconds = max(int(delta.total_seconds()), 0)
+        return self._human_age_seconds(seconds)
+
+    def _human_age_seconds(self, seconds: int) -> str:
+        seconds = max(int(seconds), 0)
         if seconds < 60:
             return f"{seconds}s ago"
         if seconds < 3600:
