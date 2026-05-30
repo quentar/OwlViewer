@@ -28,13 +28,14 @@ from pyowletapi.exceptions import OwletError
 from pyowletapi.sock import Sock
 
 
+BOX_BACKGROUND_COLOR = wx.Colour(255, 255, 255)
 LEVEL_COLORS = {
-    "normal": wx.Colour(255, 255, 255),
+    "normal": BOX_BACKGROUND_COLOR,
     "yellow": wx.Colour(255, 247, 204),
     "red": wx.Colour(255, 213, 213),
 }
 FLASH_RED = wx.Colour(255, 120, 120)
-TEXT_COLOR = wx.Colour(20, 20, 20)
+TEXT_COLOR = wx.Colour(0, 0, 0)
 TITLE_COLOR = wx.Colour(35, 35, 35)
 LINE_COLOR = wx.Colour(35, 117, 255)
 
@@ -44,16 +45,21 @@ class SparklinePanel(wx.Panel):
         super().__init__(parent)
         self.SetMinSize((120, 54))
         self.values: list[float] = []
+        self.background_color = BOX_BACKGROUND_COLOR
         self.Bind(wx.EVT_PAINT, self._on_paint)
 
     def set_values(self, values: list[float]) -> None:
         self.values = values
         self.Refresh()
 
+    def set_background_color(self, color: wx.Colour) -> None:
+        self.background_color = color
+        self.Refresh()
+
     def _on_paint(self, _event: wx.PaintEvent) -> None:
         dc = wx.PaintDC(self)
         w, h = self.GetClientSize()
-        dc.SetBrush(wx.Brush(wx.Colour(248, 252, 255)))
+        dc.SetBrush(wx.Brush(self.background_color))
         dc.SetPen(wx.Pen(wx.Colour(230, 235, 242), 1))
         dc.DrawRectangle(0, 0, w, h)
 
@@ -114,14 +120,16 @@ class MetricTile(wx.Panel):
         super().__init__(parent)
         self.SetMinSize((180, 150))
         self.value_font_boost = value_font_boost
+        self.text_color = TEXT_COLOR
+        self.normal_bg_color = BOX_BACKGROUND_COLOR
         self.SetBackgroundColour(wx.Colour(245, 246, 248))
 
         self.inner = wx.Panel(self)
-        self.inner.SetBackgroundColour(LEVEL_COLORS["normal"])
+        self.inner.SetBackgroundColour(BOX_BACKGROUND_COLOR)
 
         self.title = wx.StaticText(self.inner, label=label)
         self.title.SetFont(wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        self.title.SetForegroundColour(TITLE_COLOR)
+        self.title.SetForegroundColour(TEXT_COLOR)
         self.vocalize_cb = wx.CheckBox(self.inner, label="🔊")
         self.vocalize_cb.SetValue(default_vocalize)
         self.alarm_vocalize_cb = wx.CheckBox(self.inner, label="🔔")
@@ -136,7 +144,7 @@ class MetricTile(wx.Panel):
         for alert in alerts:
             row = wx.BoxSizer(wx.HORIZONTAL)
             info = wx.StaticText(self.inner, label=self._alert_label(alert))
-            info.SetForegroundColour(wx.Colour(70, 70, 70))
+            info.SetForegroundColour(TEXT_COLOR)
             row.Add(info, proportion=1, flag=wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, border=8)
             alert_sizer.Add(row, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
             self.alert_rows.append({"name": str(alert.get("name", "alert")), "label": info})
@@ -161,6 +169,19 @@ class MetricTile(wx.Panel):
         border.Add(self.inner, proportion=1, flag=wx.ALL | wx.EXPAND, border=3)
         self.SetSizer(border)
 
+    def apply_colors(self, text_color: wx.Colour, normal_bg_color: wx.Colour) -> None:
+        self.text_color = text_color
+        self.normal_bg_color = normal_bg_color
+        self.title.SetForegroundColour(text_color)
+        self.value.SetForegroundColour(text_color)
+        self.vocalize_cb.SetForegroundColour(text_color)
+        self.alarm_vocalize_cb.SetForegroundColour(text_color)
+        for row in self.alert_rows:
+            row["label"].SetForegroundColour(text_color)
+        if self.chart is not None:
+            self.chart.set_background_color(normal_bg_color)
+        self.Refresh()
+
     def _alert_label(self, alert: dict[str, Any]) -> str:
         name = str(alert.get("name", "alert"))
         when = str(alert.get("when", "below"))
@@ -176,12 +197,13 @@ class MetricTile(wx.Panel):
 
     def set_alert_active_level(self, level: str) -> None:
         for row in self.alert_rows:
-            is_active = row["name"].lower() == level
-            row["label"].SetForegroundColour(wx.Colour(160, 0, 0) if is_active else wx.Colour(70, 70, 70))
+            row["label"].SetForegroundColour(self.text_color)
 
     def set_alert_background(self, level: str, flash_on: bool = False) -> None:
         if level == "red" and flash_on:
             color = FLASH_RED
+        elif level == "normal":
+            color = self.normal_bg_color
         else:
             color = LEVEL_COLORS.get(level, LEVEL_COLORS["normal"])
         self.inner.SetBackgroundColour(color)
@@ -259,6 +281,7 @@ class OwletMonitorFrame(wx.Frame):
         self.announce_alarm_ended = bool(defaults.get("announce_alarm_ended", True))
         self.start_after_launch = bool(defaults.get("start_after_launch", True))
         self.start_maximized = bool(defaults.get("start_maximized", False))
+        self.night_colors_enabled = bool(defaults.get("night_colors", False))
         self.big_box_value_font_boost = float(defaults.get("big_box_value_font_boost", 1.55))
         self.window_x = int(defaults.get("window_x", -1))
         self.window_y = int(defaults.get("window_y", -1))
@@ -279,6 +302,10 @@ class OwletMonitorFrame(wx.Frame):
         self.vocal_interval_label = wx.StaticText(monitor_panel, label="Vocal Int (s):")
         self.vocal_interval_ctrl = wx.SpinCtrl(monitor_panel, min=1, max=3600, initial=self.vocalization_interval_seconds)
         self.alarm_test_btn = wx.Button(monitor_panel, label="Alarm Test")
+        self.night_colors_btn = wx.Button(
+            monitor_panel,
+            label="Night Colors: ON" if self.night_colors_enabled else "Night Colors: OFF",
+        )
 
         button_row = wx.BoxSizer(wx.HORIZONTAL)
         button_row.Add(self.start_btn, flag=wx.RIGHT, border=8)
@@ -291,6 +318,8 @@ class OwletMonitorFrame(wx.Frame):
         button_row.AddSpacer(12)
         button_row.Add(self.vocal_interval_label, flag=wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, border=6)
         button_row.Add(self.vocal_interval_ctrl, flag=wx.ALIGN_CENTER_VERTICAL)
+        button_row.AddSpacer(12)
+        button_row.Add(self.night_colors_btn, flag=wx.ALIGN_CENTER_VERTICAL)
         button_row.AddStretchSpacer(1)
         button_row.Add(self.alarm_test_btn, flag=wx.ALIGN_CENTER_VERTICAL)
 
@@ -486,11 +515,13 @@ class OwletMonitorFrame(wx.Frame):
         self.vocalize_master_btn.Bind(wx.EVT_BUTTON, self.on_toggle_vocalize_master)
         self.interval_ctrl.Bind(wx.EVT_SPINCTRL, self.on_interval_change)
         self.vocal_interval_ctrl.Bind(wx.EVT_SPINCTRL, self.on_vocal_interval_change)
+        self.night_colors_btn.Bind(wx.EVT_BUTTON, self.on_toggle_night_colors)
         self.alarm_test_btn.Bind(wx.EVT_BUTTON, self.on_alarm_test)
         self.settings_apply_btn.Bind(wx.EVT_BUTTON, self.on_apply_settings_tab)
         self.Bind(wx.EVT_CLOSE, self.on_close)
         self.Bind(wx.EVT_SIZE, self._on_resize)
         self.Bind(wx.EVT_MOVE, self._on_move)
+        self._apply_night_colors()
         self._reflow_grid()
         wx.CallAfter(self._apply_initial_window_state)
         if self.start_after_launch:
@@ -566,6 +597,38 @@ class OwletMonitorFrame(wx.Frame):
         self.settings_vocal_interval_ctrl.SetValue(self.vocalization_interval_seconds)
         self._save_default_setting("vocalization_interval_seconds", self.vocalization_interval_seconds)
         self.set_status(f"Vocalization interval set to {self.vocalization_interval_seconds}s")
+
+    def on_toggle_night_colors(self, _event: wx.CommandEvent) -> None:
+        self.night_colors_enabled = not self.night_colors_enabled
+        self.night_colors_btn.SetLabel(
+            "Night Colors: ON" if self.night_colors_enabled else "Night Colors: OFF"
+        )
+        self._apply_night_colors()
+        self._save_default_setting("night_colors", self.night_colors_enabled)
+        self.set_status(
+            "Night colors enabled" if self.night_colors_enabled else "Night colors disabled"
+        )
+
+    def _apply_night_colors(self) -> None:
+        if self.night_colors_enabled:
+            text_color = wx.Colour(255, 255, 255)
+            box_bg_color = wx.Colour(0, 0, 0)
+            page_bg = wx.Colour(0, 0, 0)
+        else:
+            text_color = wx.Colour(0, 0, 0)
+            box_bg_color = wx.Colour(255, 255, 255)
+            page_bg = wx.Colour(240, 240, 240)
+
+        self.monitor_panel.SetBackgroundColour(page_bg)
+        self.status.SetForegroundColour(text_color)
+        self.interval_label.SetForegroundColour(text_color)
+        self.vocal_interval_label.SetForegroundColour(text_color)
+
+        for tile in self.tiles.values():
+            tile.apply_colors(text_color, box_bg_color)
+
+        self._apply_alert_backgrounds()
+        self.Refresh()
 
     def on_alarm_test(self, _event: wx.CommandEvent) -> None:
         self._speak("Test alarm")

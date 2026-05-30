@@ -15,10 +15,12 @@
     "start_after_launch": true,
     "start_maximized": true,
     "big_box_value_font_boost": 3,
-    "window_x": 14,
-    "window_y": 41,
-    "window_w": 1670,
-    "window_h": 1001
+    "window_x": 4,
+    "window_y": 39,
+    "window_w": 1710,
+    "window_h": 1014,
+    "night_mode": false,
+    "night_colors": false
   },
   "boxes": [
     {
@@ -52,7 +54,7 @@
       "label": "Oxygen Saturation",
       "type": "percent",
       "size_class": "big",
-      "vocalize": true,
+      "vocalize": false,
       "vocalization_short": "Oxygen",
       "vocalization_priority": 1,
       "chart": true,
@@ -70,7 +72,8 @@
           "consecutive": 5,
           "flash": true
         }
-      ]
+      ],
+      "vocalize_alert": true
     },
     {
       "property": "oxygen_10_av",
