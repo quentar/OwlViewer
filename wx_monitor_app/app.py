@@ -377,6 +377,8 @@ class OwletMonitorFrame(wx.Frame):
                 self.big_box_value_font_boost if size_class == "big" else float(box.get("value_font_boost", 1.0))
             )
             width_scale, height_scale = self._class_scales(size_class)
+            width_scale = float(box.get("width_scale", width_scale))
+            height_scale = float(box.get("height_scale", height_scale))
             tile = MetricTile(
                 monitor_panel,
                 label=label,

@@ -15,10 +15,10 @@
     "start_after_launch": true,
     "start_maximized": true,
     "big_box_value_font_boost": 3,
-    "window_x": 4,
-    "window_y": 39,
-    "window_w": 1710,
-    "window_h": 1013,
+    "window_x": 15,
+    "window_y": 41,
+    "window_w": 1668,
+    "window_h": 1001,
     "night_mode": false,
     "night_colors": false,
     "big_width_scale": 1.45,
@@ -54,7 +54,8 @@
         }
       ],
       "vocalize_alert": true,
-      "row": 1
+      "row": 1,
+      "width_scale": 1.75
     },
     {
       "property": "oxygen_saturation",
@@ -81,7 +82,8 @@
         }
       ],
       "vocalize_alert": true,
-      "row": 1
+      "row": 1,
+      "width_scale": 0.92
     },
     {
       "property": "oxygen_10_av",
@@ -89,7 +91,8 @@
       "type": "percent",
       "size_class": "big",
       "vocalize_alert": true,
-      "row": 1
+      "row": 1,
+      "width_scale": 0.92
     },
     {
       "property": "skin_temperature",
