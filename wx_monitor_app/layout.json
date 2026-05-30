@@ -15,14 +15,14 @@
     "start_after_launch": true,
     "start_maximized": true,
     "big_box_value_font_boost": 3,
-    "window_x": 4,
+    "window_x": 5,
     "window_y": 39,
-    "window_w": 1710,
-    "window_h": 1013,
+    "window_w": 1706,
+    "window_h": 1012,
     "night_mode": false,
     "night_colors": false,
     "big_width_scale": 1.45,
-    "big_height_scale": 1.6,
+    "big_height_scale": 1.35,
     "normal_width_scale": 1.0,
     "normal_height_scale": 1.0,
     "compact_width_scale": 0.72,
@@ -109,7 +109,8 @@
       "vocalize": false,
       "chart": true,
       "vocalize_alert": true,
-      "row": 2
+      "row": 2,
+      "height_scale": 1.25
     },
     {
       "property": "reading_quality",

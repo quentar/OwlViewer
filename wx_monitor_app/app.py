@@ -390,7 +390,7 @@ class OwletMonitorFrame(wx.Frame):
         for row_idx in range(1, max_row + 1):
             row_sizer = wx.BoxSizer(wx.HORIZONTAL)
             self.row_sizers[row_idx] = row_sizer
-            bottom_border = 10 if row_idx < max_row else 0
+            bottom_border = 6 if row_idx < max_row else 0
             row_prop = max(1, int(round(row_height_weights[row_idx] * 100)))
             self.tiles_rows.Add(row_sizer, proportion=row_prop, flag=wx.EXPAND | wx.BOTTOM, border=bottom_border)
 
@@ -443,15 +443,15 @@ class OwletMonitorFrame(wx.Frame):
                 compact_max_h = max(110, int(220 * height_scale))
                 tile.SetMaxSize((-1, compact_max_h))
                 tile.SetMinSize((180, 95))
-                self.row_sizers[row].Add(tile, proportion=width_prop, flag=wx.ALL | wx.EXPAND | wx.ALIGN_TOP, border=6)
+                self.row_sizers[row].Add(tile, proportion=width_prop, flag=wx.ALL | wx.EXPAND | wx.ALIGN_TOP, border=4)
             else:
                 tile.SetMaxSize((-1, -1))
-                self.row_sizers[row].Add(tile, proportion=width_prop, flag=wx.ALL | wx.EXPAND, border=6)
+                self.row_sizers[row].Add(tile, proportion=width_prop, flag=wx.ALL | wx.EXPAND, border=4)
 
         monitor_layout = wx.BoxSizer(wx.VERTICAL)
-        monitor_layout.Add(self.status, flag=wx.ALL | wx.EXPAND, border=10)
-        monitor_layout.Add(button_row, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=10)
-        monitor_layout.Add(self.tiles_rows, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
+        monitor_layout.Add(self.status, flag=wx.ALL | wx.EXPAND, border=8)
+        monitor_layout.Add(button_row, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=8)
+        monitor_layout.Add(self.tiles_rows, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=8)
         monitor_panel.SetSizer(monitor_layout)
 
         self.settings_poll_ctrl = wx.SpinCtrl(settings_panel, min=1, max=300, initial=self.poll_seconds)
@@ -1180,7 +1180,7 @@ class OwletMonitorFrame(wx.Frame):
             current = int(float(value))
             series = self._series.get(prop, [])
             avg = sum(series) / len(series) if series else float(current)
-            return f"{current}\navg {avg:.1f}"
+            return f"{current}, avg {avg:.1f}"
         return str(value)
 
     def _human_age(self, delta) -> str:
