@@ -10,7 +10,9 @@
     "vocalize_master": false,
     "vocalization_engine": "macos_say",
     "vocalization_interval_seconds": 32,
-    "reconnect_stale_seconds": 180
+    "reconnect_stale_seconds": 180,
+    "announce_alarm_ended": true,
+    "start_after_launch": true
   },
   "boxes": [
     {
@@ -50,8 +52,8 @@
         {
           "name": "yellow",
           "when": "below",
-          "threshold": 94,
-          "consecutive": 3
+          "threshold": 95,
+          "consecutive": 1
         },
         {
           "name": "red",

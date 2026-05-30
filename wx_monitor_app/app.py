@@ -18,6 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
 LAYOUT_PATH = PROJECT_ROOT / "wx_monitor_app" / "layout.json"
 LAYOUT_BACKUP_PATH = PROJECT_ROOT / "wx_monitor_app" / "layout.settings-backup.json"
+ICON_PATH = PROJECT_ROOT / "wx_monitor_app" / "icon.jpeg"
 
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
@@ -121,6 +122,8 @@ class MetricTile(wx.Panel):
         self.title.SetForegroundColour(TITLE_COLOR)
         self.vocalize_cb = wx.CheckBox(self.inner, label="🔊")
         self.vocalize_cb.SetValue(default_vocalize)
+        self.alarm_vocalize_cb = wx.CheckBox(self.inner, label="🔔")
+        self.alarm_vocalize_cb.SetValue(default_vocalize)
 
         self.value = wx.StaticText(self.inner, label="--")
         self.value.SetForegroundColour(TEXT_COLOR)
@@ -143,6 +146,8 @@ class MetricTile(wx.Panel):
         title_row = wx.BoxSizer(wx.HORIZONTAL)
         title_row.Add(self.title, proportion=1, flag=wx.ALIGN_CENTER_VERTICAL)
         title_row.Add(self.vocalize_cb, flag=wx.ALIGN_CENTER_VERTICAL)
+        title_row.AddSpacer(6)
+        title_row.Add(self.alarm_vocalize_cb, flag=wx.ALIGN_CENTER_VERTICAL)
         inner_layout.Add(title_row, flag=wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND, border=10)
         inner_layout.Add(self.value, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
         inner_layout.Add(alert_sizer, proportion=0, flag=wx.EXPAND)
@@ -187,6 +192,9 @@ class MetricTile(wx.Panel):
 
     def is_vocalize_enabled(self) -> bool:
         return self.vocalize_cb.GetValue()
+
+    def is_alarm_vocalize_enabled(self) -> bool:
+        return self.alarm_vocalize_cb.GetValue()
 
     def _set_best_font(self, text: str) -> None:
         width = max(self.GetSize().GetWidth() - 24, 120)
@@ -234,13 +242,15 @@ class OwletMonitorFrame(wx.Frame):
 
         defaults = self.layout_config.get("defaults", {})
         self.default_vocalize = bool(defaults.get("vocalize", True))
-        self.default_history_size = int(defaults.get("history_size", 30))
+        self.chart_values_count = int(defaults.get("chart_values_count", defaults.get("history_size", 30)))
         self.default_chart = bool(defaults.get("chart", False))
         self.poll_seconds = int(defaults.get("poll_interval_seconds", self.layout_config.get("poll_seconds", 10)))
         self.vocalize_master_enabled = bool(defaults.get("vocalize_master", False))
         self.vocalization_engine = str(defaults.get("vocalization_engine", "macos_say"))
         self.vocalization_interval_seconds = int(defaults.get("vocalization_interval_seconds", 10))
         self.reconnect_stale_seconds = int(defaults.get("reconnect_stale_seconds", 180))
+        self.announce_alarm_ended = bool(defaults.get("announce_alarm_ended", True))
+        self.start_after_launch = bool(defaults.get("start_after_launch", True))
         self._last_vocalized_at: dict[str, float] = {}
         self._speech_queue: queue.Queue[str] = queue.Queue()
         self._speech_stop_event = threading.Event()
@@ -278,6 +288,7 @@ class OwletMonitorFrame(wx.Frame):
             alerts = box.get("alerts", [])
             chart_enabled = bool(box.get("chart", self.default_chart))
             tile_vocalize_default = bool(box.get("vocalize", self.default_vocalize))
+            tile_alarm_vocalize_default = bool(box.get("vocalize_alert", tile_vocalize_default))
             tile = MetricTile(
                 monitor_panel,
                 label=label,
@@ -285,6 +296,7 @@ class OwletMonitorFrame(wx.Frame):
                 default_vocalize=tile_vocalize_default,
                 chart_enabled=chart_enabled,
             )
+            tile.alarm_vocalize_cb.SetValue(tile_alarm_vocalize_default)
             self.tiles[prop] = tile
             self.box_config[prop] = box
             self.ordered_properties.append(prop)
@@ -294,6 +306,10 @@ class OwletMonitorFrame(wx.Frame):
             tile.vocalize_cb.Bind(
                 wx.EVT_CHECKBOX,
                 lambda event, key=prop: self.on_tile_vocalize_change(event, key),
+            )
+            tile.alarm_vocalize_cb.Bind(
+                wx.EVT_CHECKBOX,
+                lambda event, key=prop: self.on_tile_alarm_vocalize_change(event, key),
             )
             self.tiles_grid.Add(tile, proportion=1, flag=wx.EXPAND)
 
@@ -310,15 +326,22 @@ class OwletMonitorFrame(wx.Frame):
         self.settings_reconnect_ctrl = wx.SpinCtrl(
             settings_panel, min=10, max=3600, initial=self.reconnect_stale_seconds
         )
+        self.settings_chart_count_ctrl = wx.SpinCtrl(
+            settings_panel, min=5, max=300, initial=self.chart_values_count
+        )
         self.settings_engine_ctrl = wx.Choice(settings_panel, choices=["macos_say", "none"])
         self.settings_engine_ctrl.SetStringSelection(
             self.vocalization_engine if self.vocalization_engine in {"macos_say", "none"} else "macos_say"
         )
         self.settings_master_cb = wx.CheckBox(settings_panel, label="Global Vocalize Enabled")
         self.settings_master_cb.SetValue(self.vocalize_master_enabled)
+        self.settings_alarm_ended_cb = wx.CheckBox(settings_panel, label="Announce Alarm Ended")
+        self.settings_alarm_ended_cb.SetValue(self.announce_alarm_ended)
+        self.settings_start_after_launch_cb = wx.CheckBox(settings_panel, label="Start Monitor After Launch")
+        self.settings_start_after_launch_cb.SetValue(self.start_after_launch)
         self.settings_apply_btn = wx.Button(settings_panel, label="Apply Settings")
 
-        settings_grid = wx.FlexGridSizer(10, 2, 6, 10)
+        settings_grid = wx.FlexGridSizer(16, 2, 6, 10)
         settings_grid.Add(wx.StaticText(settings_panel, label="Poll Interval (s):"), flag=wx.ALIGN_CENTER_VERTICAL)
         settings_grid.Add(self.settings_poll_ctrl, flag=wx.EXPAND)
         settings_grid.Add(wx.StaticText(settings_panel, label=""), flag=wx.EXPAND)
@@ -349,6 +372,16 @@ class OwletMonitorFrame(wx.Frame):
             ),
             flag=wx.EXPAND,
         )
+        settings_grid.Add(wx.StaticText(settings_panel, label="Chart Values Count:"), flag=wx.ALIGN_CENTER_VERTICAL)
+        settings_grid.Add(self.settings_chart_count_ctrl, flag=wx.EXPAND)
+        settings_grid.Add(wx.StaticText(settings_panel, label=""), flag=wx.EXPAND)
+        settings_grid.Add(
+            wx.StaticText(
+                settings_panel,
+                label="Number of recent values kept for charts and movement average.",
+            ),
+            flag=wx.EXPAND,
+        )
         settings_grid.Add(wx.StaticText(settings_panel, label="Vocalization Engine:"), flag=wx.ALIGN_CENTER_VERTICAL)
         settings_grid.Add(self.settings_engine_ctrl, flag=wx.EXPAND)
         settings_grid.Add(wx.StaticText(settings_panel, label=""), flag=wx.EXPAND)
@@ -366,6 +399,26 @@ class OwletMonitorFrame(wx.Frame):
             wx.StaticText(
                 settings_panel,
                 label="Global speech gate for non-alert messages. Active alerts can still speak.",
+            ),
+            flag=wx.EXPAND,
+        )
+        settings_grid.Add(wx.StaticText(settings_panel, label="Announce Alarm Ended:"), flag=wx.ALIGN_CENTER_VERTICAL)
+        settings_grid.Add(self.settings_alarm_ended_cb, flag=wx.ALIGN_CENTER_VERTICAL)
+        settings_grid.Add(wx.StaticText(settings_panel, label=""), flag=wx.EXPAND)
+        settings_grid.Add(
+            wx.StaticText(
+                settings_panel,
+                label="When alert clears, speaks '<name> back to <value>' if enabled.",
+            ),
+            flag=wx.EXPAND,
+        )
+        settings_grid.Add(wx.StaticText(settings_panel, label="Start After Launch:"), flag=wx.ALIGN_CENTER_VERTICAL)
+        settings_grid.Add(self.settings_start_after_launch_cb, flag=wx.ALIGN_CENTER_VERTICAL)
+        settings_grid.Add(wx.StaticText(settings_panel, label=""), flag=wx.EXPAND)
+        settings_grid.Add(
+            wx.StaticText(
+                settings_panel,
+                label="Automatically presses Start when the app window opens.",
             ),
             flag=wx.EXPAND,
         )
@@ -400,6 +453,8 @@ class OwletMonitorFrame(wx.Frame):
         self.Bind(wx.EVT_CLOSE, self.on_close)
         self.Bind(wx.EVT_SIZE, self._on_resize)
         self._reflow_grid()
+        if self.start_after_launch:
+            wx.CallAfter(self.on_start, wx.CommandEvent())
 
     def _load_layout_config(self) -> dict[str, Any]:
         with LAYOUT_PATH.open("r", encoding="utf-8") as file:
@@ -475,8 +530,11 @@ class OwletMonitorFrame(wx.Frame):
         self.poll_seconds = int(self.settings_poll_ctrl.GetValue())
         self.vocalization_interval_seconds = int(self.settings_vocal_interval_ctrl.GetValue())
         self.reconnect_stale_seconds = int(self.settings_reconnect_ctrl.GetValue())
+        self.chart_values_count = int(self.settings_chart_count_ctrl.GetValue())
         self.vocalization_engine = str(self.settings_engine_ctrl.GetStringSelection())
         self.vocalize_master_enabled = bool(self.settings_master_cb.GetValue())
+        self.announce_alarm_ended = bool(self.settings_alarm_ended_cb.GetValue())
+        self.start_after_launch = bool(self.settings_start_after_launch_cb.GetValue())
 
         self.interval_ctrl.SetValue(self.poll_seconds)
         self.vocal_interval_ctrl.SetValue(self.vocalization_interval_seconds)
@@ -487,12 +545,19 @@ class OwletMonitorFrame(wx.Frame):
         self._save_default_setting("poll_interval_seconds", self.poll_seconds)
         self._save_default_setting("vocalization_interval_seconds", self.vocalization_interval_seconds)
         self._save_default_setting("reconnect_stale_seconds", self.reconnect_stale_seconds)
+        self._save_default_setting("chart_values_count", self.chart_values_count)
         self._save_default_setting("vocalization_engine", self.vocalization_engine)
         self._save_default_setting("vocalize_master", self.vocalize_master_enabled)
+        self._save_default_setting("announce_alarm_ended", self.announce_alarm_ended)
+        self._save_default_setting("start_after_launch", self.start_after_launch)
         self.set_status("Settings updated")
 
     def on_tile_vocalize_change(self, _event: wx.CommandEvent, prop: str) -> None:
         self.box_config[prop]["vocalize"] = self.tiles[prop].is_vocalize_enabled()
+        self._save_layout_config()
+
+    def on_tile_alarm_vocalize_change(self, _event: wx.CommandEvent, prop: str) -> None:
+        self.box_config[prop]["vocalize_alert"] = self.tiles[prop].is_alarm_vocalize_enabled()
         self._save_layout_config()
 
     def _save_default_setting(self, key: str, value: Any) -> None:
@@ -609,7 +674,7 @@ class OwletMonitorFrame(wx.Frame):
             level = self._evaluate_alert_level(config, raw_value)
             self._current_levels[prop] = level
             tile = self.tiles[prop]
-            tile.set_value(self._format_metric(config, raw_value, now), level)
+            tile.set_value(self._format_metric(prop, config, raw_value, now), level)
             tile.set_alert_active_level(level)
             tile.set_chart_values(self._series[prop])
             msg = self._build_vocalization_message(prop, raw_value, previous_levels.get(prop, "normal"), level)
@@ -636,14 +701,22 @@ class OwletMonitorFrame(wx.Frame):
         if self.vocalization_engine == "none":
             return None
         tile = self.tiles[prop]
-        if not tile.is_vocalize_enabled():
+
+        if prev_level in {"yellow", "red"} and level == "normal":
+            if tile.is_alarm_vocalize_enabled() and self.announce_alarm_ended:
+                self._last_vocalized_at[prop] = time.time()
+                return self._vocalization_back_phrase(prop, value)
             return None
 
         if level in {"yellow", "red"}:
+            if not tile.is_alarm_vocalize_enabled():
+                return None
             message = self._vocalization_phrase(prop, value)
             self._last_vocalized_at[prop] = time.time()
             return message
 
+        if not tile.is_vocalize_enabled():
+            return None
         if not self.vocalize_master_enabled:
             return None
 
@@ -660,6 +733,12 @@ class OwletMonitorFrame(wx.Frame):
         shortcut = str(box.get("vocalization_short", box.get("label", prop)))
         value_text = self._vocalization_value(box, value)
         return f"{shortcut} {value_text}".strip()
+
+    def _vocalization_back_phrase(self, prop: str, value: Any) -> str:
+        box = self.box_config[prop]
+        shortcut = str(box.get("vocalization_short", box.get("label", prop)))
+        value_text = self._vocalization_value(box, value)
+        return f"{shortcut} back to {value_text}".strip()
 
     def _vocalization_value(self, box: dict[str, Any], value: Any) -> str:
         if value is None:
@@ -706,7 +785,7 @@ class OwletMonitorFrame(wx.Frame):
             numeric = float(raw_value)
         except (TypeError, ValueError):
             return
-        history_size = int(self.box_config[prop].get("history_size", self.default_history_size))
+        history_size = int(self.box_config[prop].get("history_size", self.chart_values_count))
         series = self._series[prop]
         series.append(numeric)
         if len(series) > history_size:
@@ -742,7 +821,7 @@ class OwletMonitorFrame(wx.Frame):
                 continue
             raw_value = self._latest_props.get(prop)
             level = self._current_levels.get(prop, "normal")
-            self.tiles[prop].set_value(self._format_metric(config, raw_value, now), level)
+            self.tiles[prop].set_value(self._format_metric(prop, config, raw_value, now), level)
 
     def _on_resize(self, event: wx.SizeEvent) -> None:
         self._reflow_grid()
@@ -818,7 +897,7 @@ class OwletMonitorFrame(wx.Frame):
                 return True
         return False
 
-    def _format_metric(self, config: dict[str, Any], value: Any, now: datetime) -> str:
+    def _format_metric(self, prop: str, config: dict[str, Any], value: Any, now: datetime) -> str:
         if value is None:
             return "--"
 
@@ -849,6 +928,11 @@ class OwletMonitorFrame(wx.Frame):
                 return str(value)
         if value_type == "int":
             return str(int(float(value)))
+        if value_type == "movement_with_avg":
+            current = int(float(value))
+            series = self._series.get(prop, [])
+            avg = sum(series) / len(series) if series else float(current)
+            return f"{current}\navg {avg:.1f}"
 
         return str(value)
 
@@ -869,6 +953,11 @@ class OwletMonitorFrame(wx.Frame):
 class OwletMonitorApp(wx.App):
     def OnInit(self) -> bool:
         frame = OwletMonitorFrame()
+        if ICON_PATH.exists():
+            icon = wx.Icon(str(ICON_PATH), wx.BITMAP_TYPE_JPEG)
+            if icon.IsOk():
+                frame.SetIcon(icon)
+                self.SetTopWindow(frame)
         frame.Show()
         return True
 
