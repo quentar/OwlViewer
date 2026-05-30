@@ -3,12 +3,13 @@
   "poll_seconds": 10,
   "defaults": {
     "history_size": 30,
+    "chart_values_count": 30,
     "vocalize": false,
     "chart": false,
     "poll_interval_seconds": 11,
-    "vocalize_master": true,
+    "vocalize_master": false,
     "vocalization_engine": "macos_say",
-    "vocalization_interval_seconds": 30,
+    "vocalization_interval_seconds": 32,
     "reconnect_stale_seconds": 180
   },
   "boxes": [
@@ -24,23 +25,24 @@
         {
           "name": "yellow",
           "when": "above",
-          "threshold": 175,
+          "threshold": 180,
           "consecutive": 1
         },
         {
           "name": "red",
           "when": "above",
-          "threshold": 190,
+          "threshold": 192,
           "consecutive": 1,
           "flash": true
         }
-      ]
+      ],
+      "vocalize_alert": true
     },
     {
       "property": "oxygen_saturation",
       "label": "Oxygen Saturation",
       "type": "percent",
-      "vocalize": false,
+      "vocalize": true,
       "vocalization_short": "Oxygen",
       "vocalization_priority": 1,
       "chart": true,
@@ -63,39 +65,46 @@
     {
       "property": "oxygen_10_av",
       "label": "Oxygen 10m Avg",
-      "type": "percent"
+      "type": "percent",
+      "vocalize_alert": true
     },
     {
       "property": "skin_temperature",
       "label": "Skin Temp",
-      "type": "int"
+      "type": "int",
+      "vocalize_alert": true
     },
     {
       "property": "movement",
       "label": "Movement",
-      "type": "int",
+      "type": "movement_with_avg",
       "vocalize": false,
-      "chart": true
+      "chart": true,
+      "vocalize_alert": true
     },
     {
       "property": "battery_minutes",
       "label": "Battery Time",
-      "type": "minutes_duration"
+      "type": "minutes_duration",
+      "vocalize_alert": true
     },
     {
       "property": "battery_percentage",
       "label": "Battery",
-      "type": "percent"
+      "type": "percent",
+      "vocalize_alert": true
     },
     {
       "property": "monitoring_start_time",
       "label": "Monitoring Start",
-      "type": "epoch_with_age"
+      "type": "epoch_with_age",
+      "vocalize_alert": true
     },
     {
       "property": "last_updated",
       "label": "Last Refreshed",
-      "type": "refreshed_age_seconds"
+      "type": "refreshed_age_seconds",
+      "vocalize_alert": true
     }
   ]
 }
