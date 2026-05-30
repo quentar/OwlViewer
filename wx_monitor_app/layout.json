@@ -12,7 +12,12 @@
     "vocalization_interval_seconds": 32,
     "reconnect_stale_seconds": 180,
     "announce_alarm_ended": true,
-    "start_after_launch": true
+    "start_after_launch": true,
+    "start_maximized": true,
+    "window_x": 6,
+    "window_y": 39,
+    "window_w": 1704,
+    "window_h": 1012
   },
   "boxes": [
     {

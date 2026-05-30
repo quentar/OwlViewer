@@ -218,6 +218,7 @@ class OwletMonitorFrame(wx.Frame):
         root_panel = wx.Panel(self)
         self.notebook = wx.Notebook(root_panel)
         monitor_panel = wx.Panel(self.notebook)
+        self.monitor_panel = monitor_panel
         settings_panel = wx.Panel(self.notebook)
         self.notebook.AddPage(monitor_panel, "Monitor")
         self.notebook.AddPage(settings_panel, "Settings")
@@ -239,6 +240,9 @@ class OwletMonitorFrame(wx.Frame):
         self._latest_props: dict[str, Any] = {}
         self._series: dict[str, list[float]] = {}
         self._alarm_test_until: float = 0.0
+        self._last_reconnect_utc: datetime | None = None
+        self._successful_requests_since_reconnect = 0
+        self._successful_requests_total = 0
 
         defaults = self.layout_config.get("defaults", {})
         self.default_vocalize = bool(defaults.get("vocalize", True))
@@ -251,6 +255,11 @@ class OwletMonitorFrame(wx.Frame):
         self.reconnect_stale_seconds = int(defaults.get("reconnect_stale_seconds", 180))
         self.announce_alarm_ended = bool(defaults.get("announce_alarm_ended", True))
         self.start_after_launch = bool(defaults.get("start_after_launch", True))
+        self.start_maximized = bool(defaults.get("start_maximized", False))
+        self.window_x = int(defaults.get("window_x", -1))
+        self.window_y = int(defaults.get("window_y", -1))
+        self.window_w = int(defaults.get("window_w", 1120))
+        self.window_h = int(defaults.get("window_h", 820))
         self._last_vocalized_at: dict[str, float] = {}
         self._speech_queue: queue.Queue[str] = queue.Queue()
         self._speech_stop_event = threading.Event()
@@ -339,9 +348,14 @@ class OwletMonitorFrame(wx.Frame):
         self.settings_alarm_ended_cb.SetValue(self.announce_alarm_ended)
         self.settings_start_after_launch_cb = wx.CheckBox(settings_panel, label="Start Monitor After Launch")
         self.settings_start_after_launch_cb.SetValue(self.start_after_launch)
+        self.settings_start_maximized_cb = wx.CheckBox(settings_panel, label="Start Maximized")
+        self.settings_start_maximized_cb.SetValue(self.start_maximized)
         self.settings_apply_btn = wx.Button(settings_panel, label="Apply Settings")
+        self.debug_reconnect_label = wx.StaticText(settings_panel, label="Last Reconnection: never")
+        self.debug_success_since_label = wx.StaticText(settings_panel, label="Successful Requests (since reconnect): 0")
+        self.debug_success_total_label = wx.StaticText(settings_panel, label="Successful Requests (total): 0")
 
-        settings_grid = wx.FlexGridSizer(16, 2, 6, 10)
+        settings_grid = wx.FlexGridSizer(18, 2, 6, 10)
         settings_grid.Add(wx.StaticText(settings_panel, label="Poll Interval (s):"), flag=wx.ALIGN_CENTER_VERTICAL)
         settings_grid.Add(self.settings_poll_ctrl, flag=wx.EXPAND)
         settings_grid.Add(wx.StaticText(settings_panel, label=""), flag=wx.EXPAND)
@@ -422,11 +436,26 @@ class OwletMonitorFrame(wx.Frame):
             ),
             flag=wx.EXPAND,
         )
+        settings_grid.Add(wx.StaticText(settings_panel, label="Start Maximized:"), flag=wx.ALIGN_CENTER_VERTICAL)
+        settings_grid.Add(self.settings_start_maximized_cb, flag=wx.ALIGN_CENTER_VERTICAL)
+        settings_grid.Add(wx.StaticText(settings_panel, label=""), flag=wx.EXPAND)
+        settings_grid.Add(
+            wx.StaticText(
+                settings_panel,
+                label="If enabled, launches maximized; otherwise restores last saved window position/size.",
+            ),
+            flag=wx.EXPAND,
+        )
         settings_grid.AddGrowableCol(1, 1)
 
         settings_layout = wx.BoxSizer(wx.VERTICAL)
         settings_layout.Add(settings_grid, flag=wx.ALL | wx.EXPAND, border=16)
         settings_layout.Add(self.settings_apply_btn, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=16)
+        settings_layout.Add(wx.StaticLine(settings_panel), flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=16)
+        settings_layout.Add(wx.StaticText(settings_panel, label="Debug Info"), flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=16)
+        settings_layout.Add(self.debug_reconnect_label, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=16)
+        settings_layout.Add(self.debug_success_since_label, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=16)
+        settings_layout.Add(self.debug_success_total_label, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=16)
         settings_layout.AddStretchSpacer(1)
         settings_panel.SetSizer(settings_layout)
 
@@ -452,9 +481,20 @@ class OwletMonitorFrame(wx.Frame):
         self.settings_apply_btn.Bind(wx.EVT_BUTTON, self.on_apply_settings_tab)
         self.Bind(wx.EVT_CLOSE, self.on_close)
         self.Bind(wx.EVT_SIZE, self._on_resize)
+        self.Bind(wx.EVT_MOVE, self._on_move)
         self._reflow_grid()
+        wx.CallAfter(self._apply_initial_window_state)
         if self.start_after_launch:
             wx.CallAfter(self.on_start, wx.CommandEvent())
+
+    def _apply_initial_window_state(self) -> None:
+        if self.start_maximized:
+            self.Maximize(True)
+        elif self.window_x >= 0 and self.window_y >= 0:
+            self.SetPosition((self.window_x, self.window_y))
+            self.SetSize((self.window_w, self.window_h))
+        self.Layout()
+        self._reflow_grid()
 
     def _load_layout_config(self) -> dict[str, Any]:
         with LAYOUT_PATH.open("r", encoding="utf-8") as file:
@@ -489,6 +529,7 @@ class OwletMonitorFrame(wx.Frame):
         self._request_stop()
 
     def on_close(self, event: wx.CloseEvent) -> None:
+        self._persist_window_state()
         self._request_stop()
         self.ui_timer.Stop()
         self._stop_speech_worker()
@@ -535,6 +576,7 @@ class OwletMonitorFrame(wx.Frame):
         self.vocalize_master_enabled = bool(self.settings_master_cb.GetValue())
         self.announce_alarm_ended = bool(self.settings_alarm_ended_cb.GetValue())
         self.start_after_launch = bool(self.settings_start_after_launch_cb.GetValue())
+        self.start_maximized = bool(self.settings_start_maximized_cb.GetValue())
 
         self.interval_ctrl.SetValue(self.poll_seconds)
         self.vocal_interval_ctrl.SetValue(self.vocalization_interval_seconds)
@@ -550,6 +592,9 @@ class OwletMonitorFrame(wx.Frame):
         self._save_default_setting("vocalize_master", self.vocalize_master_enabled)
         self._save_default_setting("announce_alarm_ended", self.announce_alarm_ended)
         self._save_default_setting("start_after_launch", self.start_after_launch)
+        self._save_default_setting("start_maximized", self.start_maximized)
+        if self.start_maximized:
+            self.Maximize(True)
         self.set_status("Settings updated")
 
     def on_tile_vocalize_change(self, _event: wx.CommandEvent, prop: str) -> None:
@@ -605,12 +650,18 @@ class OwletMonitorFrame(wx.Frame):
                 socks = {device["device"]["dsn"]: Sock(api, device["device"]) for device in devices["response"]}
                 if not socks:
                     raise OwletError("No devices found")
+                self._last_reconnect_utc = datetime.now(timezone.utc)
+                self._successful_requests_since_reconnect = 0
+                wx.CallAfter(self._update_debug_info_labels)
 
                 wx.CallAfter(self.set_status, f"Running ({len(socks)} device(s), polling every {self.poll_seconds}s)")
                 reconnect_needed = False
                 while not self._stop_event.is_set():
                     props = await self._poll_once(socks)
+                    self._successful_requests_since_reconnect += 1
+                    self._successful_requests_total += 1
                     wx.CallAfter(self._apply_metrics, props)
+                    wx.CallAfter(self._update_debug_info_labels)
                     stale_age = self._last_updated_age_seconds(props)
                     if stale_age is not None and stale_age > self.reconnect_stale_seconds:
                         reconnect_needed = True
@@ -811,8 +862,25 @@ class OwletMonitorFrame(wx.Frame):
 
     def _on_ui_timer(self, _event: wx.TimerEvent) -> None:
         if not self._latest_props:
+            self._update_debug_info_labels()
             return
-        self._refresh_dynamic_display(datetime.now())
+        now = datetime.now()
+        self._refresh_dynamic_display(now)
+        self._update_debug_info_labels()
+
+    def _update_debug_info_labels(self) -> None:
+        if self._last_reconnect_utc is None:
+            reconnect_text = "never"
+        else:
+            age_seconds = max(int((datetime.now(timezone.utc) - self._last_reconnect_utc).total_seconds()), 0)
+            reconnect_text = f"{self._last_reconnect_utc.strftime('%Y/%m/%d %H:%M:%S')} UTC ({age_seconds}s ago)"
+        self.debug_reconnect_label.SetLabel(f"Last Reconnection: {reconnect_text}")
+        self.debug_success_since_label.SetLabel(
+            f"Successful Requests (since reconnect): {self._successful_requests_since_reconnect}"
+        )
+        self.debug_success_total_label.SetLabel(
+            f"Successful Requests (total): {self._successful_requests_total}"
+        )
 
     def _refresh_dynamic_display(self, now: datetime) -> None:
         for prop in self.ordered_properties:
@@ -825,14 +893,29 @@ class OwletMonitorFrame(wx.Frame):
 
     def _on_resize(self, event: wx.SizeEvent) -> None:
         self._reflow_grid()
+        self._persist_window_state()
         event.Skip()
+
+    def _on_move(self, event: wx.MoveEvent) -> None:
+        self._persist_window_state()
+        event.Skip()
+
+    def _persist_window_state(self) -> None:
+        if self.IsMaximized():
+            return
+        pos = self.GetPosition()
+        size = self.GetSize()
+        self._save_default_setting("window_x", int(pos.x))
+        self._save_default_setting("window_y", int(pos.y))
+        self._save_default_setting("window_w", int(size.x))
+        self._save_default_setting("window_h", int(size.y))
 
     def _reflow_grid(self) -> None:
         n = len(self.ordered_properties)
         if n == 0:
             return
 
-        available = self.GetClientSize()
+        available = self.monitor_panel.GetClientSize()
         best_cols = 1
         best_score = -1.0
         target_ratio = 1.35
