@@ -283,6 +283,12 @@ class OwletMonitorFrame(wx.Frame):
         self.start_maximized = bool(defaults.get("start_maximized", False))
         self.night_colors_enabled = bool(defaults.get("night_colors", False))
         self.big_box_value_font_boost = float(defaults.get("big_box_value_font_boost", 1.55))
+        self.big_width_scale = float(defaults.get("big_width_scale", 1.45))
+        self.big_height_scale = float(defaults.get("big_height_scale", 1.60))
+        self.normal_width_scale = float(defaults.get("normal_width_scale", 1.00))
+        self.normal_height_scale = float(defaults.get("normal_height_scale", 1.00))
+        self.compact_width_scale = float(defaults.get("compact_width_scale", 0.72))
+        self.compact_height_scale = float(defaults.get("compact_height_scale", 0.55))
         self.window_x = int(defaults.get("window_x", -1))
         self.window_y = int(defaults.get("window_y", -1))
         self.window_w = int(defaults.get("window_w", 1120))
@@ -323,7 +329,42 @@ class OwletMonitorFrame(wx.Frame):
         button_row.AddStretchSpacer(1)
         button_row.Add(self.alarm_test_btn, flag=wx.ALIGN_CENTER_VERTICAL)
 
-        self.tiles_wrap = wx.WrapSizer(wx.HORIZONTAL)
+        max_row = 1
+        for box in self.layout_config["boxes"]:
+            try:
+                max_row = max(max_row, int(box.get("row", 1)))
+            except (TypeError, ValueError):
+                max_row = max(max_row, 1)
+
+        row_height_sums: dict[int, float] = {i: 0.0 for i in range(1, max_row + 1)}
+        row_counts: dict[int, int] = {i: 0 for i in range(1, max_row + 1)}
+        for box in self.layout_config["boxes"]:
+            try:
+                row_idx = int(box.get("row", 1))
+            except (TypeError, ValueError):
+                row_idx = 1
+            row_idx = max(1, min(row_idx, max_row))
+            size_class = str(box.get("size_class", "normal")).lower()
+            _, h_scale = self._class_scales(size_class)
+            row_height_sums[row_idx] += h_scale
+            row_counts[row_idx] += 1
+
+        row_height_weights: dict[int, float] = {}
+        for i in range(1, max_row + 1):
+            if row_counts[i] == 0:
+                row_height_weights[i] = 1.0
+            else:
+                row_height_weights[i] = max(0.35, row_height_sums[i] / row_counts[i])
+
+        self.row_sizers: dict[int, wx.BoxSizer] = {}
+        self.tiles_rows = wx.BoxSizer(wx.VERTICAL)
+        for row_idx in range(1, max_row + 1):
+            row_sizer = wx.BoxSizer(wx.HORIZONTAL)
+            self.row_sizers[row_idx] = row_sizer
+            bottom_border = 10 if row_idx < max_row else 0
+            row_prop = max(1, int(round(row_height_weights[row_idx] * 100)))
+            self.tiles_rows.Add(row_sizer, proportion=row_prop, flag=wx.EXPAND | wx.BOTTOM, border=bottom_border)
+
         for box in self.layout_config["boxes"]:
             prop = str(box["property"])
             label = str(box.get("label", prop))
@@ -335,6 +376,7 @@ class OwletMonitorFrame(wx.Frame):
             value_font_boost = (
                 self.big_box_value_font_boost if size_class == "big" else float(box.get("value_font_boost", 1.0))
             )
+            width_scale, height_scale = self._class_scales(size_class)
             tile = MetricTile(
                 monitor_panel,
                 label=label,
@@ -358,12 +400,25 @@ class OwletMonitorFrame(wx.Frame):
                 wx.EVT_CHECKBOX,
                 lambda event, key=prop: self.on_tile_alarm_vocalize_change(event, key),
             )
-            self.tiles_wrap.Add(tile, flag=wx.ALL, border=6)
+            try:
+                row = int(box.get("row", 1))
+            except (TypeError, ValueError):
+                row = 1
+            row = max(1, min(row, max_row))
+            width_prop = max(1, int(round(width_scale * 100)))
+            if size_class == "compact":
+                compact_max_h = max(110, int(220 * height_scale))
+                tile.SetMaxSize((-1, compact_max_h))
+                tile.SetMinSize((180, 95))
+                self.row_sizers[row].Add(tile, proportion=width_prop, flag=wx.ALL | wx.EXPAND | wx.ALIGN_TOP, border=6)
+            else:
+                tile.SetMaxSize((-1, -1))
+                self.row_sizers[row].Add(tile, proportion=width_prop, flag=wx.ALL | wx.EXPAND, border=6)
 
         monitor_layout = wx.BoxSizer(wx.VERTICAL)
         monitor_layout.Add(self.status, flag=wx.ALL | wx.EXPAND, border=10)
         monitor_layout.Add(button_row, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=10)
-        monitor_layout.Add(self.tiles_wrap, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
+        monitor_layout.Add(self.tiles_rows, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
         monitor_panel.SetSizer(monitor_layout)
 
         self.settings_poll_ctrl = wx.SpinCtrl(settings_panel, min=1, max=300, initial=self.poll_seconds)
@@ -687,6 +742,13 @@ class OwletMonitorFrame(wx.Frame):
             json.dump(self.layout_config, file, indent=2)
             file.write("\n")
 
+    def _class_scales(self, size_class: str) -> tuple[float, float]:
+        if size_class == "big":
+            return self.big_width_scale, self.big_height_scale
+        if size_class == "compact":
+            return self.compact_width_scale, self.compact_height_scale
+        return self.normal_width_scale, self.normal_height_scale
+
     def _request_stop(self) -> None:
         self._stop_event.set()
         self.start_btn.Enable()
@@ -983,26 +1045,6 @@ class OwletMonitorFrame(wx.Frame):
         self._save_default_setting("window_h", int(size.y))
 
     def _reflow_grid(self) -> None:
-        n = len(self.ordered_properties)
-        if n == 0:
-            return
-
-        available = self.monitor_panel.GetClientSize()
-        base_w = max(int((available.width - 80) / 3), 260)
-        base_h = max(int((available.height - 180) / 3), 180)
-        for prop in self.ordered_properties:
-            tile = self.tiles[prop]
-            size_class = str(self.box_config[prop].get("size_class", "normal")).lower()
-            if size_class == "big":
-                w = int(base_w * 1.24)
-                h = int(base_h * 1.36)
-            elif size_class == "compact":
-                w = int(base_w * 0.70)
-                h = int(base_h * 0.58)
-            else:
-                w = base_w
-                h = base_h
-            tile.SetMinSize((max(w, 180), max(h, 100)))
         self.Layout()
 
     def _evaluate_alert_level(self, config: dict[str, Any], value: Any) -> str:

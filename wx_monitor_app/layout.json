@@ -18,9 +18,15 @@
     "window_x": 4,
     "window_y": 39,
     "window_w": 1710,
-    "window_h": 1014,
+    "window_h": 1013,
     "night_mode": false,
-    "night_colors": false
+    "night_colors": false,
+    "big_width_scale": 1.45,
+    "big_height_scale": 1.6,
+    "normal_width_scale": 1.0,
+    "normal_height_scale": 1.0,
+    "compact_width_scale": 0.72,
+    "compact_height_scale": 0.55
   },
   "boxes": [
     {
@@ -47,7 +53,8 @@
           "flash": true
         }
       ],
-      "vocalize_alert": true
+      "vocalize_alert": true,
+      "row": 1
     },
     {
       "property": "oxygen_saturation",
@@ -73,21 +80,24 @@
           "flash": true
         }
       ],
-      "vocalize_alert": true
+      "vocalize_alert": true,
+      "row": 1
     },
     {
       "property": "oxygen_10_av",
       "label": "Oxygen 10m Avg",
       "type": "percent",
       "size_class": "big",
-      "vocalize_alert": true
+      "vocalize_alert": true,
+      "row": 1
     },
     {
       "property": "skin_temperature",
       "label": "Skin Temp",
       "type": "int",
       "size_class": "compact",
-      "vocalize_alert": true
+      "vocalize_alert": true,
+      "row": 2
     },
     {
       "property": "movement",
@@ -95,33 +105,38 @@
       "type": "movement_with_avg",
       "vocalize": false,
       "chart": true,
-      "vocalize_alert": true
+      "vocalize_alert": true,
+      "row": 2
     },
     {
       "property": "battery_minutes",
       "label": "Battery Time",
       "type": "minutes_duration",
       "size_class": "compact",
-      "vocalize_alert": true
+      "vocalize_alert": true,
+      "row": 3
     },
     {
       "property": "battery_percentage",
       "label": "Battery",
       "type": "percent",
       "size_class": "compact",
-      "vocalize_alert": true
+      "vocalize_alert": true,
+      "row": 2
     },
     {
       "property": "monitoring_start_time",
       "label": "Monitoring Start",
       "type": "epoch_with_age",
-      "vocalize_alert": true
+      "vocalize_alert": true,
+      "row": 3
     },
     {
       "property": "last_updated",
       "label": "Last Refreshed",
       "type": "refreshed_age_seconds",
-      "vocalize_alert": true
+      "vocalize_alert": true,
+      "row": 3
     }
   ]
 }
