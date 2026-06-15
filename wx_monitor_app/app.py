@@ -3,6 +3,7 @@ import json
 import math
 import queue
 import shutil
+import ssl
 import subprocess
 import sys
 import threading
@@ -12,7 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import aiohttp
 import wx
+import wx.lib.buttons as wx_buttons
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
@@ -42,6 +45,28 @@ ALERT_TEXT_COLORS = {
     "yellow": wx.Colour(176, 120, 0),
     "red": wx.Colour(200, 0, 0),
 }
+HEADER_BUTTON_BG = wx.Colour(210, 210, 210)
+HEADER_BUTTON_TEXT = wx.Colour(0, 0, 0)
+
+
+def create_client_session() -> aiohttp.ClientSession:
+    try:
+        import certifi
+    except ImportError:
+        ssl_context = ssl.create_default_context()
+    else:
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+
+    connector = aiohttp.TCPConnector(ssl=ssl_context)
+    return aiohttp.ClientSession(connector=connector)
+
+
+def create_header_button(parent: wx.Window, label: str) -> wx_buttons.GenButton:
+    button = wx_buttons.GenButton(parent, label=label)
+    button.SetBackgroundColour(HEADER_BUTTON_BG)
+    button.SetForegroundColour(HEADER_BUTTON_TEXT)
+    button.SetUseFocusIndicator(False)
+    return button
 
 
 class SparklinePanel(wx.Panel):
@@ -278,8 +303,8 @@ class OwletMonitorFrame(wx.Frame):
         self.notebook.AddPage(settings_panel, "Settings")
 
         self.status = wx.StaticText(monitor_panel, label="Idle")
-        self.start_btn = wx.Button(monitor_panel, label="Start")
-        self.stop_btn = wx.Button(monitor_panel, label="Stop")
+        self.start_btn = create_header_button(monitor_panel, "Start")
+        self.stop_btn = create_header_button(monitor_panel, "Stop")
         self.stop_btn.Disable()
 
         self.tiles: dict[str, MetricTile] = {}
@@ -331,15 +356,22 @@ class OwletMonitorFrame(wx.Frame):
         self._speech_thread = threading.Thread(target=self._speech_worker, daemon=True)
         self._speech_thread.start()
 
-        self.vocalize_master_btn = wx.Button(
+        self.vocalize_master_btn = create_header_button(
             monitor_panel,
-            label="Vocalize: ON" if self.vocalize_master_enabled else "Vocalize: OFF",
+            "Vocalize: ON" if self.vocalize_master_enabled else "Vocalize: OFF",
         )
-        self.alarm_test_btn = wx.Button(monitor_panel, label="Alarm Test")
-        self.night_colors_btn = wx.Button(
+        self.alarm_test_btn = create_header_button(monitor_panel, "Alarm Test")
+        self.night_colors_btn = create_header_button(
             monitor_panel,
-            label="Night Colors: ON" if self.night_colors_enabled else "Night Colors: OFF",
+            "Night Colors: ON" if self.night_colors_enabled else "Night Colors: OFF",
         )
+        self.header_buttons = [
+            self.start_btn,
+            self.stop_btn,
+            self.vocalize_master_btn,
+            self.night_colors_btn,
+            self.alarm_test_btn,
+        ]
 
         button_row = wx.BoxSizer(wx.HORIZONTAL)
         button_row.Add(self.start_btn, flag=wx.RIGHT, border=8)
@@ -725,12 +757,19 @@ class OwletMonitorFrame(wx.Frame):
 
         self.monitor_panel.SetBackgroundColour(page_bg)
         self.status.SetForegroundColour(text_color)
+        self._apply_header_button_colors()
 
         for tile in self.tiles.values():
             tile.apply_colors(text_color, box_bg_color)
 
         self._apply_alert_backgrounds()
         self.Refresh()
+
+    def _apply_header_button_colors(self) -> None:
+        for button in self.header_buttons:
+            button.SetBackgroundColour(HEADER_BUTTON_BG)
+            button.SetForegroundColour(HEADER_BUTTON_TEXT)
+            button.Refresh()
 
     def on_alarm_test(self, _event: wx.CommandEvent) -> None:
         self._speak("Test alarm")
@@ -825,7 +864,8 @@ class OwletMonitorFrame(wx.Frame):
             api: OwletAPI | None = None
             try:
                 wx.CallAfter(self.set_status, "Authenticating...")
-                api = OwletAPI(config["region"], config["username"], config["password"])
+                session = create_client_session()
+                api = OwletAPI(config["region"], config["username"], config["password"], session=session)
                 await api.authenticate()
                 devices = await api.get_devices()
                 socks = {device["device"]["dsn"]: Sock(api, device["device"]) for device in devices["response"]}
@@ -870,6 +910,10 @@ class OwletMonitorFrame(wx.Frame):
                 wx.CallAfter(self.set_status, f"Monitor error: {err}. Retrying...")
                 if not self._stop_event.is_set():
                     await asyncio.sleep(3)
+            except aiohttp.ClientConnectorCertificateError as err:
+                wx.CallAfter(self.set_status, f"SSL certificate error: {err}. Install certifi, then retrying...")
+                if not self._stop_event.is_set():
+                    await asyncio.sleep(3)
             finally:
                 if api is not None:
                     await api.close()
@@ -905,19 +949,23 @@ class OwletMonitorFrame(wx.Frame):
         previous_levels = dict(self._current_levels)
         self._latest_props = props
         self._update_debug_raw_output(props)
+        sock_off = self._is_sock_off(props)
+        if sock_off:
+            for prop in self.ordered_properties:
+                self._alert_spoken_active[prop] = False
         now = datetime.now()
         speak_items: list[tuple[int, int, str]] = []
         for idx, prop in enumerate(self.ordered_properties):
             config = self.box_config[prop]
             raw_value = props.get(prop)
             self._append_series(prop, raw_value)
-            level = self._evaluate_alert_level(config, raw_value)
+            level = "normal" if sock_off else self._evaluate_alert_level(config, raw_value)
             self._current_levels[prop] = level
             tile = self.tiles[prop]
             tile.set_value(self._format_metric(prop, config, raw_value, now), level)
             tile.set_alert_active_level(level)
             tile.set_chart_values(self._series[prop])
-            msg = self._build_vocalization_message(prop, raw_value, previous_levels.get(prop, "normal"), level)
+            msg = None if sock_off else self._build_vocalization_message(prop, raw_value, previous_levels.get(prop, "normal"), level)
             if msg:
                 priority = int(config.get("vocalization_priority", idx + 100))
                 speak_items.append((priority, idx, msg))
@@ -936,6 +984,18 @@ class OwletMonitorFrame(wx.Frame):
             self.flash_timer.Stop()
             self._flash_on = False
         self._apply_alert_backgrounds()
+
+    def _is_sock_off(self, props: dict[str, Any]) -> bool:
+        charging = self._int_prop(props, "charging", 0)
+        base_station_on = self._int_prop(props, "base_station_on", 0)
+        return charging == 1 or base_station_on == 0
+
+    def _int_prop(self, props: dict[str, Any], key: str, default: int) -> int:
+        raw_value = props.get(key, default)
+        try:
+            return int(0 if raw_value is None else raw_value)
+        except (TypeError, ValueError):
+            return default
 
     def _build_vocalization_message(self, prop: str, value: Any, prev_level: str, level: str) -> str | None:
         if self.vocalization_engine == "none":
@@ -1206,15 +1266,9 @@ class OwletMonitorFrame(wx.Frame):
         value_type = str(config.get("type", "plain"))
 
         if value_type == "reading_quality_state":
-            charging_raw = self._latest_props.get("charging", 0)
-            base_station_on_raw = self._latest_props.get("base_station_on", 0)
-            readings_flag_raw = self._latest_props.get("readings_flag", 1)
-            oxygen_10_av_raw = self._latest_props.get("oxygen_10_av", 0)
-            charging = int(0 if charging_raw is None else charging_raw)
-            base_station_on = int(0 if base_station_on_raw is None else base_station_on_raw)
-            readings_flag = int(1 if readings_flag_raw is None else readings_flag_raw)
-            oxygen_10_av = int(0 if oxygen_10_av_raw is None else oxygen_10_av_raw)
-            if charging == 1 or base_station_on == 0:
+            readings_flag = self._int_prop(self._latest_props, "readings_flag", 1)
+            oxygen_10_av = self._int_prop(self._latest_props, "oxygen_10_av", 0)
+            if self._is_sock_off(self._latest_props):
                 return "Sock off"
             if readings_flag == 0:
                 return "Good signal"
@@ -1228,6 +1282,12 @@ class OwletMonitorFrame(wx.Frame):
 
         if value is None:
             return "--"
+        if prop == "oxygen_10_av":
+            try:
+                if int(float(value)) == 255:
+                    return "n/a"
+            except (TypeError, ValueError):
+                return "n/a"
 
         if value_type == "bpm":
             return f"{int(float(value))} bpm"

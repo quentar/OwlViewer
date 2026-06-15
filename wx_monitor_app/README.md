@@ -18,7 +18,7 @@ Simple desktop monitor that reuses `src/pyowletapi` and polls all socks every 10
 ## Install
 
 ```bash
-pip install aiohttp wxPython
+pip install aiohttp certifi wxPython
 ```
 
 ## Run
