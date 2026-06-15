@@ -336,6 +336,7 @@ class OwletMonitorFrame(wx.Frame):
         self.vocalization_interval_seconds = int(defaults.get("vocalization_interval_seconds", 10))
         self.reconnect_stale_seconds = int(defaults.get("reconnect_stale_seconds", 180))
         self.announce_alarm_ended = bool(defaults.get("announce_alarm_ended", True))
+        self.vocalize_alerts_after_consecutive = bool(defaults.get("vocalize_alerts_after_consecutive", True))
         self.start_after_launch = bool(defaults.get("start_after_launch", True))
         self.start_maximized = bool(defaults.get("start_maximized", False))
         self.night_colors_enabled = bool(defaults.get("night_colors", False))
@@ -498,6 +499,8 @@ class OwletMonitorFrame(wx.Frame):
         self.settings_master_cb.SetValue(self.vocalize_master_enabled)
         self.settings_alarm_ended_cb = wx.CheckBox(settings_panel, label="Announce Alarm Ended")
         self.settings_alarm_ended_cb.SetValue(self.announce_alarm_ended)
+        self.settings_alert_after_repeats_cb = wx.CheckBox(settings_panel, label="Alert Voice After Repeats")
+        self.settings_alert_after_repeats_cb.SetValue(self.vocalize_alerts_after_consecutive)
         self.settings_start_after_launch_cb = wx.CheckBox(settings_panel, label="Start Monitor After Launch")
         self.settings_start_after_launch_cb.SetValue(self.start_after_launch)
         self.settings_start_maximized_cb = wx.CheckBox(settings_panel, label="Start Maximized")
@@ -583,6 +586,16 @@ class OwletMonitorFrame(wx.Frame):
             wx.StaticText(
                 settings_panel,
                 label="When alert clears, speaks '<name> back to <value>' if enabled.",
+            ),
+            flag=wx.EXPAND,
+        )
+        settings_grid.Add(wx.StaticText(settings_panel, label="Alert Voice After Repeats:"), flag=wx.ALIGN_CENTER_VERTICAL)
+        settings_grid.Add(self.settings_alert_after_repeats_cb, flag=wx.ALIGN_CENTER_VERTICAL)
+        settings_grid.Add(wx.StaticText(settings_panel, label=""), flag=wx.EXPAND)
+        settings_grid.Add(
+            wx.StaticText(
+                settings_panel,
+                label="Alarm speech waits until the alert's consecutive reading count is reached.",
             ),
             flag=wx.EXPAND,
         )
@@ -788,6 +801,7 @@ class OwletMonitorFrame(wx.Frame):
         self.vocalization_engine = str(self.settings_engine_ctrl.GetStringSelection())
         self.vocalize_master_enabled = bool(self.settings_master_cb.GetValue())
         self.announce_alarm_ended = bool(self.settings_alarm_ended_cb.GetValue())
+        self.vocalize_alerts_after_consecutive = bool(self.settings_alert_after_repeats_cb.GetValue())
         self.start_after_launch = bool(self.settings_start_after_launch_cb.GetValue())
         self.start_maximized = bool(self.settings_start_maximized_cb.GetValue())
 
@@ -804,6 +818,7 @@ class OwletMonitorFrame(wx.Frame):
         self._save_default_setting("vocalization_engine", self.vocalization_engine)
         self._save_default_setting("vocalize_master", self.vocalize_master_enabled)
         self._save_default_setting("announce_alarm_ended", self.announce_alarm_ended)
+        self._save_default_setting("vocalize_alerts_after_consecutive", self.vocalize_alerts_after_consecutive)
         self._save_default_setting("start_after_launch", self.start_after_launch)
         self._save_default_setting("start_maximized", self.start_maximized)
         if self.start_maximized:
@@ -1021,6 +1036,9 @@ class OwletMonitorFrame(wx.Frame):
             if not self._alert_voice_allowed(prop, level):
                 self._alert_spoken_active[prop] = False
                 return None
+            if not self._alert_repeat_reached(prop, level):
+                self._alert_spoken_active[prop] = False
+                return None
             message = self._alert_voice_message(prop, level) or self._vocalization_phrase(prop, value)
             self._last_vocalized_at[prop] = time.time()
             self._alert_spoken_active[prop] = True
@@ -1074,6 +1092,19 @@ class OwletMonitorFrame(wx.Frame):
             if isinstance(msg, str) and msg.strip():
                 return msg.strip()
         return None
+
+    def _alert_repeat_reached(self, prop: str, level: str) -> bool:
+        if not self.vocalize_alerts_after_consecutive:
+            return True
+        rule = self._active_alert_rule(prop, level)
+        if not rule:
+            return True
+        key = str(rule.get("name", level))
+        try:
+            needed = int(rule.get("consecutive", 1))
+        except (TypeError, ValueError):
+            needed = 1
+        return self._rule_counts.get(prop, {}).get(key, 0) >= needed
 
     def _vocalization_phrase(self, prop: str, value: Any) -> str:
         box = self.box_config[prop]

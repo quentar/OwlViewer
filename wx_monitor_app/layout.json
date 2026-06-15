@@ -12,13 +12,14 @@
     "vocalization_interval_seconds": 32,
     "reconnect_stale_seconds": 180,
     "announce_alarm_ended": true,
+    "vocalize_alerts_after_consecutive": true,
     "start_after_launch": true,
     "start_maximized": true,
     "big_box_value_font_boost": 3,
-    "window_x": 9,
-    "window_y": 39,
-    "window_w": 1692,
-    "window_h": 1008,
+    "window_x": 151,
+    "window_y": 68,
+    "window_w": 1122,
+    "window_h": 821,
     "night_mode": false,
     "night_colors": false,
     "big_width_scale": 1.45,
@@ -70,13 +71,13 @@
         {
           "name": "yellow",
           "when": "below",
-          "threshold": 95,
-          "consecutive": 1
+          "threshold": 94,
+          "consecutive": 3
         },
         {
           "name": "red",
           "when": "below",
-          "threshold": 94,
+          "threshold": 90,
           "consecutive": 5,
           "flash": true
         }
@@ -125,7 +126,7 @@
         {
           "name": "yellow",
           "when": "above",
-          "threshold": 75,
+          "threshold": 74,
           "consecutive": 1,
           "voice_message": "baby moving",
           "voice_requires_any_active_alerts": [
@@ -179,7 +180,8 @@
       "type": "refreshed_age_seconds",
       "vocalize_alert": true,
       "size_class": "compact",
-      "row": 3
+      "row": 3,
+      "vocalize": true
     }
   ]
 }
