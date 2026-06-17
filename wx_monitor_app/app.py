@@ -17,11 +17,23 @@ import aiohttp
 import wx
 import wx.lib.buttons as wx_buttons
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SRC_DIR = PROJECT_ROOT / "src"
-LAYOUT_PATH = PROJECT_ROOT / "wx_monitor_app" / "layout.json"
-LAYOUT_BACKUP_PATH = PROJECT_ROOT / "wx_monitor_app" / "layout.settings-backup.json"
-ICON_PATH = PROJECT_ROOT / "wx_monitor_app" / "icon.jpeg"
+FROZEN = bool(getattr(sys, "frozen", False))
+if FROZEN:
+    RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS")).resolve()
+    if sys.platform == "darwin" and Path(sys.executable).parents[2].suffix == ".app":
+        PROJECT_ROOT = Path(sys.executable).parents[3]
+    else:
+        PROJECT_ROOT = Path(sys.executable).resolve().parent
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    RESOURCE_ROOT = PROJECT_ROOT
+
+SRC_DIR = RESOURCE_ROOT / "src"
+LAYOUT_TEMPLATE_PATH = RESOURCE_ROOT / "wx_monitor_app" / "layout.json"
+LAYOUT_PATH = PROJECT_ROOT / "layout.json" if FROZEN else LAYOUT_TEMPLATE_PATH
+LAYOUT_BACKUP_PATH = PROJECT_ROOT / "layout.settings-backup.json" if FROZEN else PROJECT_ROOT / "wx_monitor_app" / "layout.settings-backup.json"
+ICON_PATH = RESOURCE_ROOT / "wx_monitor_app" / "icon.jpeg"
+LOGIN_PATH = PROJECT_ROOT / "login.json"
 
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
@@ -689,6 +701,8 @@ class OwletMonitorFrame(wx.Frame):
         self._reflow_grid()
 
     def _load_layout_config(self) -> dict[str, Any]:
+        if not LAYOUT_PATH.exists() and LAYOUT_TEMPLATE_PATH.exists():
+            shutil.copy2(LAYOUT_TEMPLATE_PATH, LAYOUT_PATH)
         with LAYOUT_PATH.open("r", encoding="utf-8") as file:
             data = json.load(file)
         if "boxes" not in data or not isinstance(data["boxes"], list):
@@ -1026,12 +1040,11 @@ class OwletMonitorFrame(wx.Frame):
             await asyncio.sleep(1)
 
     def _load_login_config(self) -> dict[str, str]:
-        login_path = PROJECT_ROOT / "login.json"
-        with login_path.open("r", encoding="utf-8") as file:
+        with LOGIN_PATH.open("r", encoding="utf-8") as file:
             data: dict[str, str] = json.load(file)
         for required_key in ("region", "username", "password"):
             if required_key not in data:
-                raise KeyError(f"Missing '{required_key}' in {login_path}")
+                raise KeyError(f"Missing '{required_key}' in {LOGIN_PATH}")
         return data
 
     async def _poll_once(self, socks: dict[str, Sock]) -> dict[str, Any]:
