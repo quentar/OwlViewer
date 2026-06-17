@@ -47,6 +47,7 @@ ALERT_TEXT_COLORS = {
 }
 HEADER_BUTTON_BG = wx.Colour(210, 210, 210)
 HEADER_BUTTON_TEXT = wx.Colour(0, 0, 0)
+STOPPED_TEXT_COLOR = wx.Colour(220, 0, 0)
 
 
 def create_client_session() -> aiohttp.ClientSession:
@@ -306,6 +307,9 @@ class OwletMonitorFrame(wx.Frame):
         self.start_btn = create_header_button(monitor_panel, "Start")
         self.stop_btn = create_header_button(monitor_panel, "Stop")
         self.stop_btn.Disable()
+        self.stopped_label = wx.StaticText(monitor_panel, label="READING STOPPED")
+        self.stopped_label.SetFont(wx.Font(24, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        self.stopped_label.SetForegroundColour(STOPPED_TEXT_COLOR)
 
         self.tiles: dict[str, MetricTile] = {}
         self.box_config: dict[str, dict[str, Any]] = {}
@@ -335,6 +339,8 @@ class OwletMonitorFrame(wx.Frame):
         self.vocalization_engine = str(defaults.get("vocalization_engine", "macos_say"))
         self.vocalization_interval_seconds = int(defaults.get("vocalization_interval_seconds", 10))
         self.reconnect_stale_seconds = int(defaults.get("reconnect_stale_seconds", 180))
+        self.reconnect_delay_seconds = int(defaults.get("reconnect_delay_seconds", 60))
+        self.max_reconnections = int(defaults.get("max_reconnections", 10))
         self.announce_alarm_ended = bool(defaults.get("announce_alarm_ended", True))
         self.vocalize_alerts_after_consecutive = bool(defaults.get("vocalize_alerts_after_consecutive", True))
         self.start_after_launch = bool(defaults.get("start_after_launch", True))
@@ -381,8 +387,10 @@ class OwletMonitorFrame(wx.Frame):
         button_row.Add(self.vocalize_master_btn)
         button_row.AddSpacer(12)
         button_row.Add(self.night_colors_btn, flag=wx.ALIGN_CENTER_VERTICAL)
-        button_row.AddStretchSpacer(1)
+        button_row.AddSpacer(12)
         button_row.Add(self.alarm_test_btn, flag=wx.ALIGN_CENTER_VERTICAL)
+        button_row.AddStretchSpacer(1)
+        button_row.Add(self.stopped_label, flag=wx.ALIGN_CENTER_VERTICAL)
 
         max_row = 1
         for box in self.layout_config["boxes"]:
@@ -703,6 +711,7 @@ class OwletMonitorFrame(wx.Frame):
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
+        self._set_stopped_indicator(False)
         self.start_btn.Disable()
         self.stop_btn.Enable()
         self.set_status("Starting...")
@@ -770,6 +779,7 @@ class OwletMonitorFrame(wx.Frame):
 
         self.monitor_panel.SetBackgroundColour(page_bg)
         self.status.SetForegroundColour(text_color)
+        self.stopped_label.SetForegroundColour(STOPPED_TEXT_COLOR)
         self._apply_header_button_colors()
 
         for tile in self.tiles.values():
@@ -850,14 +860,37 @@ class OwletMonitorFrame(wx.Frame):
             return self.compact_width_scale, self.compact_height_scale
         return self.normal_width_scale, self.normal_height_scale
 
-    def _request_stop(self) -> None:
+    def _request_stop(self, status_text: str = "Stopped") -> None:
         self._stop_event.set()
         self.start_btn.Enable()
         self.stop_btn.Disable()
         self._flashing_keys.clear()
         self.flash_timer.Stop()
+        self._flash_on = False
+        self._set_stopped_indicator(True)
+        self._apply_stopped_display_state()
         self._apply_alert_backgrounds()
-        self.set_status("Stopped")
+        self.set_status(status_text)
+
+    def _set_stopped_indicator(self, stopped: bool) -> None:
+        self.stopped_label.SetLabel("READING STOPPED" if stopped else "")
+        self.stopped_label.Show(stopped)
+        self.stopped_label.GetParent().Layout()
+
+    def _apply_stopped_display_state(self) -> None:
+        now = datetime.now()
+        for prop in self.ordered_properties:
+            self._current_levels[prop] = "normal"
+            self._alert_spoken_active[prop] = False
+            self._series[prop] = []
+            tile = self.tiles[prop]
+            if prop == "last_updated" and self._latest_props:
+                value = self._format_metric(prop, self.box_config[prop], self._latest_props.get(prop), now)
+            else:
+                value = "--"
+            tile.set_value(value, "normal")
+            tile.set_alert_active_level("normal")
+            tile.set_chart_values([])
 
     def _stop_speech_worker(self) -> None:
         if self._speech_stop_event.is_set():
@@ -875,6 +908,7 @@ class OwletMonitorFrame(wx.Frame):
 
     async def _monitor_loop(self) -> None:
         config = self._load_login_config()
+        reconnect_count = 0
         while not self._stop_event.is_set():
             api: OwletAPI | None = None
             try:
@@ -893,18 +927,33 @@ class OwletMonitorFrame(wx.Frame):
 
                 wx.CallAfter(self.set_status, f"Running ({len(socks)} device(s), polling every {self.poll_seconds}s)")
                 reconnect_needed = False
+                last_refresh_value: str | None = None
+                last_refresh_changed_at = time.monotonic()
                 while not self._stop_event.is_set():
                     props = await self._poll_once(socks)
                     self._successful_requests_since_reconnect += 1
                     self._successful_requests_total += 1
                     wx.CallAfter(self._apply_metrics, props)
                     wx.CallAfter(self._update_debug_info_labels)
-                    stale_age = self._last_updated_age_seconds(props)
-                    if stale_age is not None and stale_age > self.reconnect_stale_seconds:
+                    refresh_value = self._last_updated_value(props)
+                    if refresh_value and refresh_value != last_refresh_value:
+                        last_refresh_value = refresh_value
+                        last_refresh_changed_at = time.monotonic()
+                        reconnect_count = 0
+                    refresh_age_seconds = self._last_updated_age_seconds(props)
+                    if refresh_age_seconds is not None and refresh_age_seconds <= self.reconnect_stale_seconds:
+                        reconnect_count = 0
+                    unchanged_seconds = int(time.monotonic() - last_refresh_changed_at)
+                    if (
+                        last_refresh_value
+                        and unchanged_seconds > self.reconnect_stale_seconds
+                        and refresh_age_seconds is not None
+                        and refresh_age_seconds > self.reconnect_stale_seconds
+                    ):
                         reconnect_needed = True
                         wx.CallAfter(
                             self.set_status,
-                            f"Last refresh stale ({stale_age}s > {self.reconnect_stale_seconds}s). Reconnecting...",
+                            f"Last refresh unchanged for {unchanged_seconds}s and stale for {refresh_age_seconds}s. Reconnecting...",
                         )
                         break
                     for _ in range(self.poll_seconds):
@@ -919,22 +968,62 @@ class OwletMonitorFrame(wx.Frame):
                             0,
                         )
                         wx.CallAfter(self._update_debug_info_labels)
-                    await asyncio.sleep(2)
+                    reconnect_count += 1
+                    if reconnect_count >= self.max_reconnections:
+                        self._stop_event.set()
+                        wx.CallAfter(
+                            self._request_stop,
+                            f"Stopped after {self.max_reconnections} reconnects",
+                        )
+                        break
+                    wx.CallAfter(
+                        self.set_status,
+                        f"Reconnect {reconnect_count}/{self.max_reconnections}; waiting {self.reconnect_delay_seconds}s...",
+                    )
+                    await self._sleep_until_stop(self.reconnect_delay_seconds)
 
             except (OwletError, KeyError, FileNotFoundError, json.JSONDecodeError, ValueError) as err:
-                wx.CallAfter(self.set_status, f"Monitor error: {err}. Retrying...")
                 if not self._stop_event.is_set():
-                    await asyncio.sleep(3)
+                    reconnect_count += 1
+                    if reconnect_count >= self.max_reconnections:
+                        self._stop_event.set()
+                        wx.CallAfter(
+                            self._request_stop,
+                            f"Stopped after {self.max_reconnections} failed reconnects",
+                        )
+                    else:
+                        wx.CallAfter(
+                            self.set_status,
+                            f"Monitor error: {err}. Retry {reconnect_count}/{self.max_reconnections} in {self.reconnect_delay_seconds}s...",
+                        )
+                        await self._sleep_until_stop(self.reconnect_delay_seconds)
             except aiohttp.ClientConnectorCertificateError as err:
-                wx.CallAfter(self.set_status, f"SSL certificate error: {err}. Install certifi, then retrying...")
                 if not self._stop_event.is_set():
-                    await asyncio.sleep(3)
+                    reconnect_count += 1
+                    if reconnect_count >= self.max_reconnections:
+                        self._stop_event.set()
+                        wx.CallAfter(
+                            self._request_stop,
+                            f"Stopped after {self.max_reconnections} SSL reconnect failures",
+                        )
+                    else:
+                        wx.CallAfter(
+                            self.set_status,
+                            f"SSL certificate error: {err}. Retry {reconnect_count}/{self.max_reconnections} in {self.reconnect_delay_seconds}s...",
+                        )
+                        await self._sleep_until_stop(self.reconnect_delay_seconds)
             finally:
                 if api is not None:
                     await api.close()
 
         wx.CallAfter(self.start_btn.Enable)
         wx.CallAfter(self.stop_btn.Disable)
+
+    async def _sleep_until_stop(self, seconds: int) -> None:
+        for _ in range(max(0, seconds)):
+            if self._stop_event.is_set():
+                break
+            await asyncio.sleep(1)
 
     def _load_login_config(self) -> dict[str, str]:
         login_path = PROJECT_ROOT / "login.json"
@@ -949,6 +1038,12 @@ class OwletMonitorFrame(wx.Frame):
         first_sock = next(iter(socks.values()))
         result = await first_sock.update_properties()
         return result["properties"]
+
+    def _last_updated_value(self, props: dict[str, Any]) -> str | None:
+        raw = props.get("last_updated")
+        if not raw:
+            return None
+        return str(raw)
 
     def _last_updated_age_seconds(self, props: dict[str, Any]) -> int | None:
         raw = props.get("last_updated")
@@ -1220,6 +1315,8 @@ class OwletMonitorFrame(wx.Frame):
 
     def _refresh_dynamic_display(self, now: datetime) -> None:
         for prop in self.ordered_properties:
+            if self._stop_event.is_set() and prop != "last_updated":
+                continue
             config = self.box_config[prop]
             if config.get("type") not in {"epoch_with_age", "refreshed_age_seconds"}:
                 continue
@@ -1340,7 +1437,8 @@ class OwletMonitorFrame(wx.Frame):
             try:
                 dt = datetime.strptime(str(value), "%Y/%m/%d %H:%M:%S").replace(tzinfo=timezone.utc)
                 age_s = max(int((datetime.now(timezone.utc) - dt).total_seconds()), 0)
-                return f"{age_s}s ago"
+                local_dt = dt.astimezone()
+                return f"{self._human_age_seconds_precise(age_s)}\n{local_dt.strftime('%H:%M:%S')} local"
             except ValueError:
                 return str(value)
         if value_type == "int":
@@ -1368,6 +1466,19 @@ class OwletMonitorFrame(wx.Frame):
             return f"{hours} hour ago" if hours == 1 else f"{hours} hours ago"
         days = seconds // 86400
         return f"{days} day ago" if days == 1 else f"{days} days ago"
+
+    def _human_age_seconds_precise(self, seconds: int) -> str:
+        seconds = max(int(seconds), 0)
+        if seconds < 60:
+            return f"{seconds}s ago"
+        if seconds < 3600:
+            mins = seconds // 60
+            secs = seconds % 60
+            return f"{mins}m {secs}s ago"
+        hours = seconds // 3600
+        mins = (seconds % 3600) // 60
+        secs = seconds % 60
+        return f"{hours}h {mins}m {secs}s ago"
 
 
 class OwletMonitorApp(wx.App):

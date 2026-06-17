@@ -11,15 +11,17 @@
     "vocalization_engine": "macos_say",
     "vocalization_interval_seconds": 32,
     "reconnect_stale_seconds": 180,
+    "reconnect_delay_seconds": 60,
+    "max_reconnections": 10,
     "announce_alarm_ended": true,
     "vocalize_alerts_after_consecutive": true,
     "start_after_launch": true,
     "start_maximized": true,
     "big_box_value_font_boost": 3,
-    "window_x": 151,
+    "window_x": 152,
     "window_y": 68,
-    "window_w": 1122,
-    "window_h": 821,
+    "window_w": 1121,
+    "window_h": 820,
     "night_mode": false,
     "night_colors": false,
     "big_width_scale": 1.45,
@@ -178,10 +180,10 @@
       "property": "last_updated",
       "label": "Last Refreshed",
       "type": "refreshed_age_seconds",
-      "vocalize_alert": true,
+      "vocalize_alert": false,
       "size_class": "compact",
       "row": 3,
-      "vocalize": true
+      "vocalize": false
     }
   ]
 }
