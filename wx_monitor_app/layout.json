@@ -93,6 +93,7 @@
       "label": "Oxygen 10m Avg",
       "type": "percent",
       "size_class": "big",
+      "footer_font_size": 64,
       "vocalize_alert": true,
       "row": 1,
       "width_scale": 0.92

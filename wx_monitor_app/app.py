@@ -160,6 +160,7 @@ class MetricTile(wx.Panel):
         chart_enabled: bool,
         value_font_boost: float = 1.0,
         force_large_value: bool = False,
+        footer_font_size: int = 12,
     ) -> None:
         super().__init__(parent)
         self.SetMinSize((180, 150))
@@ -183,6 +184,12 @@ class MetricTile(wx.Panel):
         self.value = wx.StaticText(self.inner, label="--")
         self.value.SetForegroundColour(TEXT_COLOR)
         self._set_best_font("--")
+        self.footer = wx.StaticText(self.inner, label="")
+        self.footer.SetFont(
+            wx.Font(footer_font_size, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
+        )
+        self.footer.SetForegroundColour(TEXT_COLOR)
+        self.footer.Hide()
 
         self.alert_rows: list[dict[str, Any]] = []
         alert_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -212,6 +219,7 @@ class MetricTile(wx.Panel):
         title_row.Add(self.alarm_vocalize_cb, flag=wx.ALIGN_CENTER_VERTICAL)
         inner_layout.Add(title_row, flag=wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND, border=10)
         inner_layout.Add(self.value, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
+        inner_layout.Add(self.footer, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.ALIGN_RIGHT, border=10)
         inner_layout.Add(alert_sizer, proportion=0, flag=wx.EXPAND)
         if self.chart_enabled and self.chart is not None:
             inner_layout.Add(self.chart, proportion=1, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=10)
@@ -226,6 +234,7 @@ class MetricTile(wx.Panel):
         self.normal_bg_color = normal_bg_color
         self.title.SetForegroundColour(text_color)
         self.value.SetForegroundColour(text_color)
+        self.footer.SetForegroundColour(text_color)
         self.vocalize_cb.SetForegroundColour(text_color)
         self.alarm_vocalize_cb.SetForegroundColour(text_color)
         for row in self.alert_rows:
@@ -244,6 +253,11 @@ class MetricTile(wx.Panel):
     def set_value(self, value: str, level: str) -> None:
         self._set_best_font(value)
         self.value.SetLabel(value)
+        self.Layout()
+
+    def set_footer(self, value: str | None) -> None:
+        self.footer.SetLabel(value or "")
+        self.footer.Show(bool(value))
         self.Layout()
 
     def set_alert_active_level(self, level: str) -> None:
@@ -462,6 +476,7 @@ class OwletMonitorFrame(wx.Frame):
                 self.big_box_value_font_boost if size_class == "big" else float(box.get("value_font_boost", 1.0))
             )
             force_large_value = bool(box.get("force_large_value", False))
+            footer_font_size = int(box.get("footer_font_size", 12))
             width_scale, height_scale = self._class_scales(size_class)
             width_scale = float(box.get("width_scale", width_scale))
             height_scale = float(box.get("height_scale", height_scale))
@@ -473,6 +488,7 @@ class OwletMonitorFrame(wx.Frame):
                 chart_enabled=chart_enabled,
                 value_font_boost=value_font_boost,
                 force_large_value=force_large_value,
+                footer_font_size=footer_font_size,
             )
             tile.alarm_vocalize_cb.SetValue(tile_alarm_vocalize_default)
             self.tiles[prop] = tile
@@ -956,6 +972,7 @@ class OwletMonitorFrame(wx.Frame):
             else:
                 value = "--"
             tile.set_value(value, "normal")
+            tile.set_footer(self._slice_time() if prop == "oxygen_10_av" else None)
             tile.set_alert_active_level("normal")
             tile.set_chart_values([])
 
@@ -1166,6 +1183,7 @@ class OwletMonitorFrame(wx.Frame):
             self._current_levels[prop] = level
             tile = self.tiles[prop]
             tile.set_value(self._format_metric(prop, config, raw_value, now), level)
+            tile.set_footer(self._slice_time() if prop == "oxygen_10_av" else None)
             tile.set_alert_active_level(level)
             tile.set_chart_values(self._series[prop])
             msg = None if sock_off else self._build_vocalization_message(prop, raw_value, previous_levels.get(prop, "normal"), level)
@@ -1531,7 +1549,10 @@ class OwletMonitorFrame(wx.Frame):
                 dt = datetime.strptime(str(value), "%Y/%m/%d %H:%M:%S").replace(tzinfo=timezone.utc)
                 age_s = max(int((datetime.now(timezone.utc) - dt).total_seconds()), 0)
                 local_dt = dt.astimezone()
-                return f"{self._human_age_seconds_precise(age_s)}\n{local_dt.strftime('%H:%M:%S')} local"
+                age = self._human_age_seconds_precise(age_s)
+                if age_s < 60:
+                    return age
+                return f"{age}\n{local_dt.strftime('%H:%M:%S')} local"
             except ValueError:
                 return str(value)
         if value_type == "int":
@@ -1542,6 +1563,17 @@ class OwletMonitorFrame(wx.Frame):
             avg = sum(series) / len(series) if series else float(current)
             return f"{current}, avg {avg:.1f}"
         return str(value)
+
+    def _slice_time(self) -> str | None:
+        """Return the local time of the current API data slice in 24-hour form."""
+        raw = self._latest_props.get("last_updated")
+        if not raw:
+            return None
+        try:
+            data_time = datetime.strptime(str(raw), "%Y/%m/%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+        return f"Time {data_time.astimezone().strftime('%H:%M')}"
 
     def _human_age(self, delta) -> str:
         seconds = max(int(delta.total_seconds()), 0)
