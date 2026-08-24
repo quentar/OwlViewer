@@ -405,13 +405,13 @@ class OwletAPI:
 
     async def get_devices(
         self,
-        versions: list[int] = [3, 2],
+        versions: Optional[list[int]] = [3, 2],
     ) -> DevicesResponse:
         """Returns a list of devices from the Owlet API.
 
         Parameters
         ----------
-        versions: takes a list of integers representing sock versions, will only return socks where the version is in the supplied list
+        versions: takes a list of integers representing sock versions, will only return socks where the version is in the supplied list. Pass ``None`` to return the device list without fetching each device's properties.
 
         Returns
         -------
@@ -426,12 +426,15 @@ class OwletAPI:
         if isinstance(api_response, list):
             devices = api_response
 
-            checks = [
-                self._is_valid_version(d["device"]["dsn"], versions) for d in devices
-            ]
-            results = await asyncio.gather(*checks)
-
-            valid_devices = [d for d, valid in zip(devices, results) if valid]
+            if versions is None:
+                valid_devices = devices
+            else:
+                checks = [
+                    self._is_valid_version(d["device"]["dsn"], versions)
+                    for d in devices
+                ]
+                results = await asyncio.gather(*checks)
+                valid_devices = [d for d, valid in zip(devices, results) if valid]
 
             if not valid_devices:
                 raise OwletDevicesError("No devices found")

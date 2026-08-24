@@ -59,6 +59,7 @@ ALERT_TEXT_COLORS = {
 }
 HEADER_BUTTON_BG = wx.Colour(210, 210, 210)
 HEADER_BUTTON_TEXT = wx.Colour(0, 0, 0)
+SELECTED_SOCK_BUTTON_BG = wx.Colour(170, 215, 255)
 STOPPED_TEXT_COLOR = wx.Colour(220, 0, 0)
 
 
@@ -369,6 +370,13 @@ class OwletMonitorFrame(wx.Frame):
         self.window_y = int(defaults.get("window_y", -1))
         self.window_w = int(defaults.get("window_w", 1120))
         self.window_h = int(defaults.get("window_h", 820))
+        saved_sock_serial = defaults.get("selected_sock_serial")
+        self._selected_sock_serial: str | None = (
+            saved_sock_serial if isinstance(saved_sock_serial, str) else None
+        )
+        self._selected_sock_lock = threading.Lock()
+        self._poll_wake_event = threading.Event()
+        self._sock_buttons: dict[str, wx_buttons.GenButton] = {}
         self._last_vocalized_at: dict[str, float] = {}
         self._speech_queue: queue.Queue[str] = queue.Queue()
         self._speech_stop_event = threading.Event()
@@ -401,6 +409,8 @@ class OwletMonitorFrame(wx.Frame):
         button_row.Add(self.night_colors_btn, flag=wx.ALIGN_CENTER_VERTICAL)
         button_row.AddSpacer(12)
         button_row.Add(self.alarm_test_btn, flag=wx.ALIGN_CENTER_VERTICAL)
+        self._sock_button_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        button_row.Add(self._sock_button_sizer, flag=wx.ALIGN_CENTER_VERTICAL)
         button_row.AddStretchSpacer(1)
         button_row.Add(self.stopped_label, flag=wx.ALIGN_CENTER_VERTICAL)
 
@@ -807,6 +817,49 @@ class OwletMonitorFrame(wx.Frame):
             button.SetBackgroundColour(HEADER_BUTTON_BG)
             button.SetForegroundColour(HEADER_BUTTON_TEXT)
             button.Refresh()
+        self._update_sock_button_selection()
+
+    def _set_sock_buttons(self, socks: list[tuple[str, str]]) -> None:
+        self._sock_button_sizer.Clear(True)
+        self._sock_buttons.clear()
+
+        for index, (serial, _name) in enumerate(socks, start=1):
+            button = create_header_button(self.monitor_panel, f"Sock {index}")
+            button.Bind(
+                wx.EVT_BUTTON,
+                lambda _event, sock_serial=serial: self.on_select_sock(sock_serial),
+            )
+            self._sock_buttons[serial] = button
+            self._sock_button_sizer.AddSpacer(12)
+            self._sock_button_sizer.Add(button, flag=wx.ALIGN_CENTER_VERTICAL)
+
+        self._update_sock_button_selection()
+        self.monitor_panel.Layout()
+
+    def _update_sock_button_selection(self) -> None:
+        with self._selected_sock_lock:
+            selected_serial = self._selected_sock_serial
+        for serial, button in self._sock_buttons.items():
+            button.SetBackgroundColour(
+                SELECTED_SOCK_BUTTON_BG
+                if serial == selected_serial
+                else HEADER_BUTTON_BG
+            )
+            button.SetForegroundColour(HEADER_BUTTON_TEXT)
+            button.Refresh()
+
+    def on_select_sock(self, serial: str) -> None:
+        with self._selected_sock_lock:
+            if serial == self._selected_sock_serial:
+                return
+            self._selected_sock_serial = serial
+        self._save_default_setting("selected_sock_serial", serial)
+        self._poll_wake_event.set()
+        self._latest_props = {}
+        self._series.clear()
+        self._apply_stopped_display_state()
+        self._update_sock_button_selection()
+        self.set_status("Loading selected sock...")
 
     def on_alarm_test(self, _event: wx.CommandEvent) -> None:
         self._speak("Test alarm")
@@ -930,10 +983,15 @@ class OwletMonitorFrame(wx.Frame):
                 session = create_client_session()
                 api = OwletAPI(config["region"], config["username"], config["password"], session=session)
                 await api.authenticate()
-                devices = await api.get_devices()
+                devices = await api.get_devices(versions=None)
                 socks = {device["device"]["dsn"]: Sock(api, device["device"]) for device in devices["response"]}
                 if not socks:
                     raise OwletError("No devices found")
+                self._get_selected_sock_serial(socks)
+                wx.CallAfter(
+                    self._set_sock_buttons,
+                    [(serial, sock.name) for serial, sock in socks.items()],
+                )
                 self._last_reconnect_utc = datetime.now(timezone.utc)
                 self._connection_started_utc = self._last_reconnect_utc
                 self._successful_requests_since_reconnect = 0
@@ -943,8 +1001,13 @@ class OwletMonitorFrame(wx.Frame):
                 reconnect_needed = False
                 last_refresh_value: str | None = None
                 last_refresh_changed_at = time.monotonic()
+                last_polled_serial: str | None = None
                 while not self._stop_event.is_set():
-                    props = await self._poll_once(socks)
+                    selected_serial, props = await self._poll_once(socks)
+                    if selected_serial != last_polled_serial:
+                        last_polled_serial = selected_serial
+                        last_refresh_value = None
+                        last_refresh_changed_at = time.monotonic()
                     self._successful_requests_since_reconnect += 1
                     self._successful_requests_total += 1
                     wx.CallAfter(self._apply_metrics, props)
@@ -970,10 +1033,7 @@ class OwletMonitorFrame(wx.Frame):
                             f"Last refresh unchanged for {unchanged_seconds}s and stale for {refresh_age_seconds}s. Reconnecting...",
                         )
                         break
-                    for _ in range(self.poll_seconds):
-                        if self._stop_event.is_set():
-                            break
-                        await asyncio.sleep(1)
+                    await self._wait_for_poll_or_selection()
 
                 if reconnect_needed and not self._stop_event.is_set():
                     if self._connection_started_utc is not None:
@@ -1047,10 +1107,30 @@ class OwletMonitorFrame(wx.Frame):
                 raise KeyError(f"Missing '{required_key}' in {LOGIN_PATH}")
         return data
 
-    async def _poll_once(self, socks: dict[str, Sock]) -> dict[str, Any]:
-        first_sock = next(iter(socks.values()))
-        result = await first_sock.update_properties()
-        return result["properties"]
+    def _get_selected_sock_serial(self, socks: dict[str, Sock]) -> str:
+        with self._selected_sock_lock:
+            if self._selected_sock_serial not in socks:
+                self._selected_sock_serial = next(iter(socks))
+                wx.CallAfter(
+                    self._save_default_setting,
+                    "selected_sock_serial",
+                    self._selected_sock_serial,
+                )
+            return self._selected_sock_serial
+
+    async def _poll_once(self, socks: dict[str, Sock]) -> tuple[str, dict[str, Any]]:
+        selected_serial = self._get_selected_sock_serial(socks)
+        result = await socks[selected_serial].update_properties()
+        return selected_serial, result["properties"]
+
+    async def _wait_for_poll_or_selection(self) -> None:
+        for _ in range(self.poll_seconds * 10):
+            if self._stop_event.is_set():
+                return
+            if self._poll_wake_event.is_set():
+                self._poll_wake_event.clear()
+                return
+            await asyncio.sleep(0.1)
 
     def _last_updated_value(self, props: dict[str, Any]) -> str | None:
         raw = props.get("last_updated")
