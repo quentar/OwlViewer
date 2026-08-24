@@ -155,3 +155,7 @@ cython_debug/
 login.json
 path.txt
 src/pyowletapi/camera.py
+.venv/
+.venv-build/
+venv/
+dist-v1/
