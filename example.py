@@ -35,14 +35,18 @@ async def run():
         await api.authenticate()
 
         devices = await api.get_devices()
-        socks = {
-            device["device"]["dsn"]: Sock(api, device["device"])
-            for device in devices["response"]
-        }
-        for sock in socks.values():
-            # print(await sock._api.get_properties(sock.serial))
-            properties = await sock.update_properties()
-            properties = properties["properties"]
+        print("Raw devices response:")
+        print(json.dumps(devices, indent=2, default=str))
+
+        socks = [Sock(api, device["device"]) for device in devices["response"]]
+
+        print("Devices:")
+        for index, sock in enumerate(socks, start=1):
+            print(f"  Sock {index}: {sock.name} ({sock.serial})")
+
+        for sock in socks:
+            properties = (await sock.update_properties())["properties"]
+            print(f"{sock.name} ({sock.serial}):")
             print(properties)
 
     except OwletError as err:
