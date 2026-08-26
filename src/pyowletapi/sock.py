@@ -240,10 +240,30 @@ class Sock:
         self._version = version
 
     async def _check_revision(self) -> None:
-        revision_json = json.loads(
-            self._raw_properties["oem_sock_version"]["value"],
+        """Set the hardware revision when the device reports one.
+
+        Some Gen 3 devices return ``null`` for ``oem_sock_version``.  That
+        field is informational, so it must not prevent readings from the
+        device from being loaded.
+        """
+        revision_value = self._raw_properties.get("oem_sock_version", {}).get(
+            "value",
         )
-        self._revision = revision_json["rev"]
+        if not isinstance(revision_value, (str, bytes, bytearray)):
+            return
+
+        try:
+            revision_json = json.loads(revision_value)
+            revision = revision_json.get("rev")
+        except (json.JSONDecodeError, TypeError):
+            logger.debug(
+                "Ignoring invalid oem_sock_version for device %s",
+                self.serial,
+            )
+            return
+
+        if isinstance(revision, int):
+            self._revision = revision
 
     async def update_properties(
         self,

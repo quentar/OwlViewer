@@ -1,0 +1,192 @@
+{
+  "title": "OwlViewer",
+  "poll_seconds": 10,
+  "defaults": {
+    "history_size": 30,
+    "chart_values_count": 30,
+    "vocalize": false,
+    "chart": false,
+    "poll_interval_seconds": 11,
+    "vocalize_master": false,
+    "vocalization_engine": "macos_say",
+    "vocalization_interval_seconds": 32,
+    "reconnect_stale_seconds": 180,
+    "reconnect_delay_seconds": 60,
+    "max_reconnections": 10,
+    "announce_alarm_ended": true,
+    "vocalize_alerts_after_consecutive": true,
+    "start_after_launch": true,
+    "start_maximized": true,
+    "big_box_value_font_boost": 3,
+    "window_x": 0,
+    "window_y": 99,
+    "window_w": 1728,
+    "window_h": 958,
+    "night_mode": false,
+    "night_colors": true,
+    "big_width_scale": 1.45,
+    "big_height_scale": 1.35,
+    "normal_width_scale": 1.0,
+    "normal_height_scale": 1.0,
+    "compact_width_scale": 0.72,
+    "compact_height_scale": 0.55
+  },
+  "boxes": [
+    {
+      "property": "heart_rate",
+      "label": "Heart Rate",
+      "type": "bpm",
+      "size_class": "big",
+      "chart": true,
+      "vocalize": false,
+      "vocalization_short": "HR",
+      "vocalization_priority": 2,
+      "alerts": [
+        {
+          "name": "yellow",
+          "when": "above",
+          "threshold": 180,
+          "consecutive": 1
+        },
+        {
+          "name": "red",
+          "when": "above",
+          "threshold": 192,
+          "consecutive": 1,
+          "flash": true
+        }
+      ],
+      "vocalize_alert": true,
+      "row": 1,
+      "width_scale": 1.75
+    },
+    {
+      "property": "oxygen_saturation",
+      "label": "Oxygen Saturation",
+      "type": "percent",
+      "size_class": "big",
+      "vocalize": false,
+      "vocalization_short": "Oxygen",
+      "vocalization_priority": 1,
+      "chart": true,
+      "alerts": [
+        {
+          "name": "yellow",
+          "when": "below",
+          "threshold": 94,
+          "consecutive": 3
+        },
+        {
+          "name": "red",
+          "when": "below",
+          "threshold": 90,
+          "consecutive": 5,
+          "flash": true
+        }
+      ],
+      "vocalize_alert": true,
+      "row": 1,
+      "width_scale": 0.92
+    },
+    {
+      "property": "oxygen_10_av",
+      "label": "Oxygen 10m Avg",
+      "type": "percent",
+      "size_class": "big",
+      "footer_font_size": 80,
+      "footer_auto_shrink": true,
+      "footer_min_font_size": 40,
+      "vocalize_alert": true,
+      "row": 1,
+      "width_scale": 0.92
+    },
+    {
+      "property": "skin_temperature",
+      "label": "Skin Temp",
+      "type": "int",
+      "size_class": "compact",
+      "vocalize_alert": true,
+      "row": 2
+    },
+    {
+      "property": "movement",
+      "label": "Movement",
+      "type": "movement_with_avg",
+      "vocalize": false,
+      "chart": true,
+      "vocalize_alert": true,
+      "row": 2,
+      "height_scale": 1.25
+    },
+    {
+      "property": "movement_bucket",
+      "label": "Movement Bucket",
+      "type": "int",
+      "size_class": "compact",
+      "vocalize": false,
+      "vocalize_alert": true,
+      "announce_alarm_ended": false,
+      "row": 2,
+      "alerts": [
+        {
+          "name": "yellow",
+          "when": "above",
+          "threshold": 74,
+          "consecutive": 1,
+          "voice_message": "baby moving",
+          "voice_requires_any_active_alerts": [
+            "oxygen_saturation",
+            "heart_rate"
+          ],
+          "voice_requires_levels": [
+            "yellow",
+            "red"
+          ]
+        }
+      ]
+    },
+    {
+      "property": "reading_quality",
+      "label": "Reading Quality",
+      "type": "reading_quality_state",
+      "size_class": "compact",
+      "vocalize": false,
+      "chart": false,
+      "vocalize_alert": true,
+      "row": 2
+    },
+    {
+      "property": "battery_minutes",
+      "label": "Battery Time",
+      "type": "minutes_duration",
+      "size_class": "compact",
+      "vocalize_alert": true,
+      "row": 3
+    },
+    {
+      "property": "battery_percentage",
+      "label": "Battery",
+      "type": "percent",
+      "size_class": "compact",
+      "vocalize_alert": true,
+      "row": 3
+    },
+    {
+      "property": "monitoring_start_time",
+      "label": "Monitoring Start",
+      "type": "epoch_with_age",
+      "vocalize_alert": true,
+      "size_class": "compact",
+      "row": 3
+    },
+    {
+      "property": "last_updated",
+      "label": "Last Refreshed",
+      "type": "refreshed_age_seconds",
+      "vocalize_alert": false,
+      "size_class": "compact",
+      "row": 3,
+      "vocalize": false
+    }
+  ]
+}

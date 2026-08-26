@@ -153,5 +153,11 @@ cython_debug/
 
 
 login.json
+safety_acknowledgment.json
+safety_acknowledgment.tmp
 path.txt
 src/pyowletapi/camera.py
+.venv/
+.venv-build/
+venv/
+dist-v1/
