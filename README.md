@@ -1,5 +1,21 @@
 # Introduction
 
+## Create `login.json`
+
+Create a `login.json` file in the project root:
+
+```json
+{
+  "region": "world",
+  "username": "your-email@example.com",
+  "password": "your-password"
+}
+```
+
+Use `"europe"` instead of `"world"` for European accounts.
+
+`login.json` is ignored by Git. Do not commit or share it.
+
 Inspiration and API reverse engineering taken from various projects:
 
 https://github.com/BastianPoe/owlet_api

@@ -5,15 +5,19 @@ Simple desktop telemetry viewer that polls connected socks every 10 seconds.
 ## Prerequisites
 
 - Python 3.11+
-- `login.json` in the project root (`pyowletapi/login.json`) with:
+- A `login.json` file in the project root (`pyowletapi/login.json`):
 
 ```json
 {
   "region": "world",
-  "username": "you@example.com",
-  "password": "your_password"
+  "username": "your-email@example.com",
+  "password": "your-password"
 }
 ```
+
+Use `"europe"` instead of `"world"` for European accounts.
+
+`login.json` is ignored by Git. Do not commit or share it.
 
 ## Install
 
