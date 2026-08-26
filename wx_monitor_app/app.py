@@ -161,11 +161,16 @@ class MetricTile(wx.Panel):
         value_font_boost: float = 1.0,
         force_large_value: bool = False,
         footer_font_size: int = 12,
+        footer_auto_shrink: bool = False,
+        footer_min_font_size: int = 12,
     ) -> None:
         super().__init__(parent)
         self.SetMinSize((180, 150))
         self.value_font_boost = value_font_boost
         self.force_large_value = force_large_value
+        self.footer_font_size = footer_font_size
+        self.footer_auto_shrink = footer_auto_shrink
+        self.footer_min_font_size = footer_min_font_size
         self.text_color = TEXT_COLOR
         self.normal_bg_color = BOX_BACKGROUND_COLOR
         self.SetBackgroundColour(wx.Colour(245, 246, 248))
@@ -190,6 +195,7 @@ class MetricTile(wx.Panel):
         )
         self.footer.SetForegroundColour(TEXT_COLOR)
         self.footer.Hide()
+        self._footer_time: str | None = None
 
         self.alert_rows: list[dict[str, Any]] = []
         alert_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -228,6 +234,7 @@ class MetricTile(wx.Panel):
         border = wx.BoxSizer(wx.VERTICAL)
         border.Add(self.inner, proportion=1, flag=wx.ALL | wx.EXPAND, border=3)
         self.SetSizer(border)
+        self.Bind(wx.EVT_SIZE, self._on_size)
 
     def apply_colors(self, text_color: wx.Colour, normal_bg_color: wx.Colour) -> None:
         self.text_color = text_color
@@ -256,9 +263,44 @@ class MetricTile(wx.Panel):
         self.Layout()
 
     def set_footer(self, value: str | None) -> None:
+        self._footer_time = None
         self.footer.SetLabel(value or "")
         self.footer.Show(bool(value))
         self.Layout()
+
+    def set_time_footer(self, time_value: str | None) -> None:
+        self._footer_time = time_value
+        self._update_time_footer()
+        self.Layout()
+
+    def _on_size(self, event: wx.SizeEvent) -> None:
+        self._update_time_footer()
+        event.Skip()
+
+    def _update_time_footer(self) -> None:
+        if not self._footer_time:
+            return
+        usable_width = max(self.inner.GetClientSize().width - 20, 0)
+        display = f"at {self._footer_time}"
+        full_size_font = wx.Font(
+            self.footer_font_size, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL
+        )
+        self.footer.SetFont(full_size_font)
+        if self.footer_auto_shrink:
+            text_width, _ = self.footer.GetTextExtent(display)
+            scale = min(1.0, usable_width / max(text_width, 1))
+            point_size = max(self.footer_min_font_size, int(self.footer_font_size * scale))
+            self.footer.SetFont(
+                wx.Font(point_size, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
+            )
+            if point_size == self.footer_min_font_size:
+                while display and self.footer.GetTextExtent(display)[0] > usable_width:
+                    display = display[:-1]
+        else:
+            while display and self.footer.GetTextExtent(display)[0] > usable_width:
+                display = display[:-1]
+        self.footer.SetLabel(display)
+        self.footer.Show()
 
     def set_alert_active_level(self, level: str) -> None:
         normal_font = wx.Font(12, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
@@ -477,6 +519,8 @@ class OwletMonitorFrame(wx.Frame):
             )
             force_large_value = bool(box.get("force_large_value", False))
             footer_font_size = int(box.get("footer_font_size", 12))
+            footer_auto_shrink = bool(box.get("footer_auto_shrink", False))
+            footer_min_font_size = int(box.get("footer_min_font_size", 12))
             width_scale, height_scale = self._class_scales(size_class)
             width_scale = float(box.get("width_scale", width_scale))
             height_scale = float(box.get("height_scale", height_scale))
@@ -489,6 +533,8 @@ class OwletMonitorFrame(wx.Frame):
                 value_font_boost=value_font_boost,
                 force_large_value=force_large_value,
                 footer_font_size=footer_font_size,
+                footer_auto_shrink=footer_auto_shrink,
+                footer_min_font_size=footer_min_font_size,
             )
             tile.alarm_vocalize_cb.SetValue(tile_alarm_vocalize_default)
             self.tiles[prop] = tile
@@ -972,7 +1018,10 @@ class OwletMonitorFrame(wx.Frame):
             else:
                 value = "--"
             tile.set_value(value, "normal")
-            tile.set_footer(self._slice_time() if prop == "oxygen_10_av" else None)
+            if prop == "oxygen_10_av":
+                tile.set_time_footer(self._slice_time())
+            else:
+                tile.set_footer(None)
             tile.set_alert_active_level("normal")
             tile.set_chart_values([])
 
@@ -1183,7 +1232,10 @@ class OwletMonitorFrame(wx.Frame):
             self._current_levels[prop] = level
             tile = self.tiles[prop]
             tile.set_value(self._format_metric(prop, config, raw_value, now), level)
-            tile.set_footer(self._slice_time() if prop == "oxygen_10_av" else None)
+            if prop == "oxygen_10_av":
+                tile.set_time_footer(self._slice_time())
+            else:
+                tile.set_footer(None)
             tile.set_alert_active_level(level)
             tile.set_chart_values(self._series[prop])
             msg = None if sock_off else self._build_vocalization_message(prop, raw_value, previous_levels.get(prop, "normal"), level)
@@ -1573,7 +1625,7 @@ class OwletMonitorFrame(wx.Frame):
             data_time = datetime.strptime(str(raw), "%Y/%m/%d %H:%M:%S").replace(tzinfo=timezone.utc)
         except ValueError:
             return None
-        return f"Time {data_time.astimezone().strftime('%H:%M')}"
+        return data_time.astimezone().strftime("%H:%M")
 
     def _human_age(self, delta) -> str:
         seconds = max(int(delta.total_seconds()), 0)
