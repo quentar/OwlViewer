@@ -61,6 +61,11 @@ HEADER_BUTTON_BG = wx.Colour(210, 210, 210)
 HEADER_BUTTON_TEXT = wx.Colour(0, 0, 0)
 SELECTED_SOCK_BUTTON_BG = wx.Colour(170, 215, 255)
 STOPPED_TEXT_COLOR = wx.Colour(220, 0, 0)
+THIRD_PARTY_DISCLAIMER = (
+    "This app is an independent, open-source project and is not affiliated with, funded, authorized,\n"
+    "or otherwise endorsed by Owlet Baby Care, Inc. 'Owlet' and 'Owlet Smart Sock' are registered\n"
+    "trademarks of Owlet Baby Care, Inc."
+)
 
 
 def create_client_session() -> aiohttp.ClientSession:
@@ -357,11 +362,11 @@ class MetricTile(wx.Panel):
         self.value.SetFont(wx.Font(14, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
 
 
-class OwletMonitorFrame(wx.Frame):
+class OwlViewerFrame(wx.Frame):
     def __init__(self) -> None:
         self.layout_config = self._load_layout_config()
         self._backup_settings_file()
-        title = str(self.layout_config.get("title", "Owlet Monitor"))
+        title = str(self.layout_config.get("title", "OwlViewer"))
         super().__init__(parent=None, title=title, size=(1120, 820))
 
         root_panel = wx.Panel(self)
@@ -600,6 +605,7 @@ class OwletMonitorFrame(wx.Frame):
         self.settings_show_debug_cb = wx.CheckBox(settings_panel, label="Show Debug Settings")
         self.settings_show_debug_cb.SetValue(False)
         self.settings_apply_btn = wx.Button(settings_panel, label="Apply Settings")
+        self.settings_disclaimer = wx.StaticText(settings_panel, label=THIRD_PARTY_DISCLAIMER)
         self.debug_reconnect_label = wx.StaticText(settings_panel, label="Last Reconnection: never")
         self.debug_prev_connection_label = wx.StaticText(settings_panel, label="Previous Connection Duration: n/a")
         self.debug_success_since_label = wx.StaticText(settings_panel, label="Successful Requests (since reconnect): 0")
@@ -716,6 +722,8 @@ class OwletMonitorFrame(wx.Frame):
         settings_layout = wx.BoxSizer(wx.VERTICAL)
         settings_layout.Add(settings_grid, flag=wx.ALL | wx.EXPAND, border=16)
         settings_layout.Add(self.settings_apply_btn, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=16)
+        settings_layout.Add(wx.StaticLine(settings_panel), flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=16)
+        settings_layout.Add(self.settings_disclaimer, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=16)
         settings_layout.Add(self.settings_show_debug_cb, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=16)
 
         self.debug_section = wx.BoxSizer(wx.VERTICAL)
@@ -1658,9 +1666,9 @@ class OwletMonitorFrame(wx.Frame):
         return f"{hours}h {mins}m {secs}s ago"
 
 
-class OwletMonitorApp(wx.App):
+class OwlViewerApp(wx.App):
     def OnInit(self) -> bool:
-        frame = OwletMonitorFrame()
+        frame = OwlViewerFrame()
         if ICON_PATH.exists():
             icon = wx.Icon(str(ICON_PATH), wx.BITMAP_TYPE_JPEG)
             if icon.IsOk():
@@ -1671,5 +1679,5 @@ class OwletMonitorApp(wx.App):
 
 
 if __name__ == "__main__":
-    app = OwletMonitorApp(False)
+    app = OwlViewerApp(False)
     app.MainLoop()

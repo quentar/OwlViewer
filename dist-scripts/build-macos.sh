@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_VENV="${PROJECT_ROOT}/.venv-build"
-APP_NAME="OwletMonitor"
+APP_NAME="OwlViewer"
 
 cd "${PROJECT_ROOT}"
 

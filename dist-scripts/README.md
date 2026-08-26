@@ -1,4 +1,4 @@
-# Packaging OwletMonitor
+# Packaging OwlViewer
 
 These scripts build a copy-and-run desktop app with PyInstaller. Build each platform on that platform.
 
@@ -15,11 +15,11 @@ dist-scripts/make-login-template.sh
 Output:
 
 ```text
-dist/OwletMonitor.app
+dist/OwlViewer.app
 dist/login.json.template
 ```
 
-Rename `login.json.template` to `login.json`, fill credentials, and keep it next to `OwletMonitor.app`.
+Rename `login.json.template` to `login.json`, fill credentials, and keep it next to `OwlViewer.app`.
 
 ## Windows
 
@@ -33,10 +33,10 @@ Set-ExecutionPolicy -Scope Process Bypass
 Output:
 
 ```text
-dist\OwletMonitor\OwletMonitor.exe
+dist\OwlViewer\OwlViewer.exe
 ```
 
-Create `dist\OwletMonitor\login.json` next to the exe:
+Create `dist\OwlViewer\login.json` next to the exe:
 
 ```json
 {
@@ -53,7 +53,7 @@ The bundled app contains a default `layout.json`. On first launch, it copies tha
 Expected macOS distribution layout:
 
 ```text
-OwletMonitor.app
+OwlViewer.app
 login.json
 layout.json
 ```
@@ -61,7 +61,7 @@ layout.json
 Expected Windows distribution layout:
 
 ```text
-OwletMonitor.exe
+OwlViewer.exe
 login.json
 layout.json
 ```

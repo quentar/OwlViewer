@@ -1,5 +1,5 @@
 {
-  "title": "Owlet Live Monitor",
+  "title": "OwlViewer",
   "poll_seconds": 10,
   "defaults": {
     "history_size": 30,

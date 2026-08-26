@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Resolve-Path (Join-Path $ScriptDir "..")
 $BuildVenv = Join-Path $ProjectRoot ".venv-build"
-$AppName = "OwletMonitor"
+$AppName = "OwlViewer"
 
 Set-Location $ProjectRoot
 

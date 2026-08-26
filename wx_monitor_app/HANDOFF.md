@@ -1,4 +1,4 @@
-# Owlet wx GUI Handoff
+# OwlViewer GUI Handoff
 
 This is a deeper technical handoff for continuing development safely.
 
@@ -9,11 +9,11 @@ This is a deeper technical handoff for continuing development safely.
 - Startup backup snapshot: `wx_monitor_app/layout.settings-backup.json`
 - Credentials: `login.json` (repo root)
 
-The app is a wxPython dashboard over `pyowletapi` that polls one Owlet sock, renders tiles, evaluates alert rules, and optionally speaks values/alerts.
+The app is a wxPython dashboard over the bundled API client that polls one sock, renders tiles, evaluates alert rules, and optionally speaks values/alerts.
 
 ## Current behavior summary
 
-- Polls Owlet every `poll_interval_seconds` (header spin control; persisted to config).
+- Polls the connected service every `poll_interval_seconds` (header spin control; persisted to config).
 - UI timer refreshes dynamic time displays every 1 second without API calls.
 - Alert state per tile (`normal`, `yellow`, `red`) with optional flashing for `red`.
 - Optional sparkline chart per tile with last N values and min/max axis labels.
@@ -37,7 +37,7 @@ Owns all controls and layout. Must be the only place touching widgets.
 Created on Start. Runs `asyncio.run(_monitor_loop())`.
 
 Loop shape:
-1. Authenticate with Owlet API.
+1. Authenticate with the API client.
 2. Pull properties.
 3. `wx.CallAfter(_apply_metrics, props)` to marshal data back to GUI thread.
 4. Sleep `poll_seconds` in 1-second chunks (so stop is responsive).
@@ -77,7 +77,7 @@ Important methods:
 - `set_alert_background(level, flash_on)`: normal/yellow/red tile fill + flash.
 - `is_vocalize_enabled()`: per-tile speech gate.
 
-## `OwletMonitorFrame`
+## `OwlViewerFrame`
 
 Main window and controller.
 

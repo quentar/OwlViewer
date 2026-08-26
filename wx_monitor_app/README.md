@@ -1,6 +1,6 @@
-# wxPython Owlet Monitor
+# OwlViewer
 
-Simple desktop monitor that reuses `src/pyowletapi` and polls all socks every 10 seconds.
+Simple desktop telemetry viewer that polls connected socks every 10 seconds.
 
 ## Prerequisites
 
