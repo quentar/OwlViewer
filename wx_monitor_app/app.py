@@ -1,15 +1,19 @@
 import asyncio
+import hashlib
 import json
 import math
 import queue
+import re
 import shutil
 import ssl
 import subprocess
 import sys
 import threading
 import time
+import textwrap
 import traceback
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +38,10 @@ LAYOUT_PATH = PROJECT_ROOT / "layout.json" if FROZEN else LAYOUT_TEMPLATE_PATH
 LAYOUT_BACKUP_PATH = PROJECT_ROOT / "layout.settings-backup.json" if FROZEN else PROJECT_ROOT / "wx_monitor_app" / "layout.settings-backup.json"
 ICON_PATH = RESOURCE_ROOT / "wx_monitor_app" / "icon.jpeg"
 LOGIN_PATH = PROJECT_ROOT / "login.json"
+SAFETY_ACKNOWLEDGMENT_PATH = PROJECT_ROOT / "safety_acknowledgment.json"
+# Release bots: update this to the latest commit date (YYYY.M.D) for every release.
+APP_VERSION = "2026.8.26"
+MACHINE_MAC_HASH_SALT = "iunderstand"
 
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
@@ -66,6 +74,59 @@ THIRD_PARTY_DISCLAIMER = (
     "or otherwise endorsed by Owlet Baby Care, Inc. 'Owlet' and 'Owlet Smart Sock' are registered\n"
     "trademarks of Owlet Baby Care, Inc."
 )
+SAFETY_ACKNOWLEDGMENT_TEXT = (
+    "OwlViewer is an independent, open-source project maintained by volunteer contributors. It is provided "
+    "as-is, without guaranteed maintenance, support, monitoring, or availability. OwlViewer is not the official "
+    "app, is not a healthcare provider, is not a medical service, is not a diagnostic tool, is not a source of "
+    "medical advice, and is not an emergency-alert system.\n\n"
+    "Before monitoring can start, confirm each statement below."
+)
+SAFETY_ACKNOWLEDGMENT_ITEMS = (
+    "I understand that OwlViewer is an unofficial community companion app.",
+    "I understand that OwlViewer supplements, and does not replace, the official app and direct supervision.",
+    "I understand that data and alerts may be delayed, missing, or inaccurate.",
+    "I will not use OwlViewer as my only means of monitoring or emergency response.",
+    "I will seek appropriate medical or emergency help immediately if I have a health concern, and I "
+    "understand that I use OwlViewer at my own risk.",
+)
+MAC_ADDRESS_PATTERN = re.compile(r"(?i)(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}")
+
+
+def _machine_mac_addresses() -> set[str]:
+    """Return all available hardware interface addresses, normalized for comparison."""
+    commands: list[list[str]] = []
+    if sys.platform == "win32":
+        commands.append(["getmac", "/fo", "csv", "/nh"])
+    else:
+        commands.extend((["ifconfig", "-a"], ["ip", "link"]))
+
+    addresses: set[str] = set()
+    for command in commands:
+        try:
+            result = subprocess.run(command, capture_output=True, check=False, text=True, timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        for match in MAC_ADDRESS_PATTERN.findall(result.stdout):
+            address = match.replace("-", ":").lower()
+            if address not in {"00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"}:
+                addresses.add(address)
+
+    primary_address = _primary_machine_mac_address()
+    if primary_address:
+        addresses.add(primary_address)
+    return addresses
+
+
+def _primary_machine_mac_address() -> str | None:
+    node = uuid.getnode()
+    if not node:
+        return None
+    address = ":".join(f"{(node >> shift) & 0xff:02x}" for shift in range(40, -1, -8))
+    return None if address == "00:00:00:00:00:00" else address
+
+
+def _hash_mac_address(address: str) -> str:
+    return hashlib.sha256(f"{MACHINE_MAC_HASH_SALT}:{address}".encode("utf-8")).hexdigest()
 
 
 def create_client_session() -> aiohttp.ClientSession:
@@ -764,12 +825,17 @@ class OwlViewerFrame(wx.Frame):
         self.Bind(wx.EVT_CLOSE, self.on_close)
         self.Bind(wx.EVT_SIZE, self._on_resize)
         self.Bind(wx.EVT_MOVE, self._on_move)
+        self._safety_acknowledged = self._has_current_safety_acknowledgment()
+        if not self._safety_acknowledged:
+            self.start_btn.Disable()
         self._apply_night_colors()
         self._set_debug_visibility(self.settings_show_debug_cb.GetValue())
         self._reflow_grid()
         wx.CallAfter(self._apply_initial_window_state)
-        if self.start_after_launch:
+        if self._safety_acknowledged and self.start_after_launch:
             wx.CallAfter(self.on_start, wx.CommandEvent())
+        elif not self._safety_acknowledged:
+            wx.CallAfter(self._show_safety_acknowledgment)
 
     def _apply_initial_window_state(self) -> None:
         if self.start_maximized:
@@ -804,6 +870,9 @@ class OwlViewerFrame(wx.Frame):
     def on_start(self, _event: wx.CommandEvent) -> None:
         if self._thread and self._thread.is_alive():
             return
+        if not self._safety_acknowledged:
+            self._show_safety_acknowledgment()
+            return
         self._stop_event.clear()
         self._set_stopped_indicator(False)
         self.start_btn.Disable()
@@ -814,6 +883,92 @@ class OwlViewerFrame(wx.Frame):
 
     def on_stop(self, _event: wx.CommandEvent) -> None:
         self._request_stop()
+
+    def _has_current_safety_acknowledgment(self) -> bool:
+        try:
+            with SAFETY_ACKNOWLEDGMENT_PATH.open("r", encoding="utf-8") as file:
+                state = json.load(file)
+            if state.get("accepted_version") != APP_VERSION:
+                return False
+            accepted_at = datetime.fromisoformat(str(state["accepted_at_utc"]))
+            if accepted_at.tzinfo is None:
+                return False
+            age = datetime.now(timezone.utc) - accepted_at.astimezone(timezone.utc)
+            if not timedelta(0) <= age < timedelta(days=365):
+                return False
+            recorded_hash = state["machine_mac_hash"]
+            current_hashes = {
+                _hash_mac_address(address) for address in _machine_mac_addresses()
+            }
+            return recorded_hash in current_hashes
+        except (FileNotFoundError, KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            return False
+
+    def _save_safety_acknowledgment(self) -> bool:
+        primary_machine_mac = _primary_machine_mac_address()
+        if not primary_machine_mac:
+            return False
+        state = {
+            "accepted_version": APP_VERSION,
+            "accepted_at_utc": datetime.now(timezone.utc).isoformat(),
+            "machine_mac_hash": _hash_mac_address(primary_machine_mac),
+        }
+        temporary_path = SAFETY_ACKNOWLEDGMENT_PATH.with_suffix(".tmp")
+        try:
+            with temporary_path.open("w", encoding="utf-8") as file:
+                json.dump(state, file, indent=2)
+                file.write("\n")
+            temporary_path.replace(SAFETY_ACKNOWLEDGMENT_PATH)
+        except OSError:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+        return True
+
+    def _show_safety_acknowledgment(self) -> None:
+        if self._safety_acknowledged:
+            return
+
+        dialog = wx.Dialog(self, title="Safety Acknowledgment Required")
+        message = wx.StaticText(dialog, label=SAFETY_ACKNOWLEDGMENT_TEXT)
+        message.Wrap(520)
+        confirmations = [
+            wx.CheckBox(dialog, label=textwrap.fill(item, width=72))
+            for item in SAFETY_ACKNOWLEDGMENT_ITEMS
+        ]
+        acknowledge_btn = wx.Button(dialog, wx.ID_OK, label="Acknowledge and Continue")
+        acknowledge_btn.Disable()
+        cancel_btn = wx.Button(dialog, wx.ID_CANCEL, label="Quit")
+
+        def on_confirmation_change(_event: wx.CommandEvent) -> None:
+            acknowledge_btn.Enable(all(confirmation.GetValue() for confirmation in confirmations))
+
+        for confirmation in confirmations:
+            confirmation.Bind(wx.EVT_CHECKBOX, on_confirmation_change)
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        buttons.AddStretchSpacer(1)
+        buttons.Add(cancel_btn, flag=wx.RIGHT, border=8)
+        buttons.Add(acknowledge_btn)
+        layout = wx.BoxSizer(wx.VERTICAL)
+        layout.Add(message, flag=wx.ALL | wx.EXPAND, border=16)
+        for confirmation in confirmations:
+            layout.Add(confirmation, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=16)
+        layout.Add(buttons, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, border=16)
+        dialog.SetSizerAndFit(layout)
+        dialog.CentreOnParent()
+
+        result = dialog.ShowModal()
+        dialog.Destroy()
+        if result == wx.ID_OK and self._save_safety_acknowledgment():
+            self._safety_acknowledged = True
+            self.start_btn.Enable()
+            self.set_status("Safety acknowledgment recorded")
+        else:
+            self.set_status("Safety acknowledgment required before monitoring can start")
+            if result == wx.ID_CANCEL:
+                self.Close()
 
     def on_close(self, event: wx.CloseEvent) -> None:
         self._persist_window_state()
