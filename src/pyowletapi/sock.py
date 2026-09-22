@@ -267,6 +267,7 @@ class Sock:
 
     async def update_properties(
         self,
+        activate: bool = True,
     ) -> PropertiesDict:
         """Calls the Owlet api to update the properties and then returns the raw response dict, the formatted dict from
         normalise_properties and any new api tokens if they have changed.
@@ -276,8 +277,15 @@ class Sock:
         (dict):Dictionary containing three dictionaries, one with the raw json response from the API and another with the stripped down
         properties from normalise_properties, the third will contain the new api tokens if they have changed, if they haven't changed this will be None
 
+        Parameters
+        ----------
+        activate (bool):Whether the API should post APP_ACTIVE before fetching properties
+
         """
-        properties = await self._api.get_properties(self.serial)
+        if activate:
+            properties = await self._api.get_properties(self.serial)
+        else:
+            properties = await self._api.get_properties(self.serial, activate=False)
         self._raw_properties = properties["response"]
         if self._version is None:
             await self._check_version()
