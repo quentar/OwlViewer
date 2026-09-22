@@ -549,7 +549,7 @@ class OwlViewerFrame(wx.Frame):
         self.chart_values_count = int(defaults.get("chart_values_count", defaults.get("history_size", 30)))
         self.default_chart = bool(defaults.get("chart", False))
         self.poll_seconds = int(defaults.get("poll_interval_seconds", self.layout_config.get("poll_seconds", 10)))
-        self.app_active_interval_seconds = int(defaults.get("app_active_interval_seconds", 120))
+        self.app_active_interval_seconds = int(defaults.get("app_active_interval_seconds", 30))
         self.vocalize_master_enabled = bool(defaults.get("vocalize_master", False))
         self.vocalization_engine = str(defaults.get("vocalization_engine", "macos_say"))
         self.vocalization_interval_seconds = int(defaults.get("vocalization_interval_seconds", 10))
