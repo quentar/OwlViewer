@@ -100,6 +100,7 @@ class OwletAPI:
         expiry: Optional[float] = None,
         refresh: Optional[str] = None,
         session: Optional[aiohttp.ClientSession] = None,
+        validate_before_request: bool = False,
     ) -> None:
         """Sets all the necessary variables for the API caller based on the passed in information, if a session is not passed in then one is created.
 
@@ -112,6 +113,7 @@ class OwletAPI:
         expiry (str):The expiry date of the connection is stored such that if the connection is expired the object reauthenticates
         refresh (str):The refresh token for the api, this can be passed if in known, if not passed then the api will authenticate and store the new refresh token for future use
         session (aiohttp.ClientSession), optional:The aiohttp session is stored to be called against
+        validate_before_request (bool):Restore the legacy /devices.json authentication check before every request
 
         """
         self._region = region
@@ -121,6 +123,8 @@ class OwletAPI:
         self._expiry: Optional[float] = expiry
         self._refresh: Optional[str] = refresh
         self._tokens_changed: bool = False
+        self._validate_before_request = validate_before_request
+        self._authentication_lock = asyncio.Lock()
         self.session: aiohttp.ClientSession = session or aiohttp.ClientSession()
         self.headers: dict[str, str] = {}
 
@@ -343,6 +347,10 @@ class OwletAPI:
         dict: If auth token generated then dict with the new token returned
 
         """
+        async with self._authentication_lock:
+            return await self._authenticate_unlocked()
+
+    async def _authenticate_unlocked(self) -> Optional[TokenDict]:
         if self._auth_token is None and self._refresh is None:
             if self._user is None or self._password is None:
                 raise OwletAuthenticationError(
@@ -359,6 +367,15 @@ class OwletAPI:
             return await self.refresh_authentication()
 
         return None
+
+    async def _refresh_rejected_token(self, rejected_token: Optional[str]) -> None:
+        async with self._authentication_lock:
+            if self._auth_token is not None and self._auth_token != rejected_token:
+                return
+            self._auth_token = None
+            self._expiry = None
+            self.headers.pop("Authorization", None)
+            await self._authenticate_unlocked()
 
     async def validate_authentication(self) -> Optional[TokenDict]:
         async with self.session.request(
@@ -464,12 +481,14 @@ class OwletAPI:
     async def get_properties(
         self,
         device: str,
+        activate: bool = True,
     ) -> PropertiesResponse:
         """Gets the properties from the Owlet API for a given device.
 
         Parameters
         ----------
         device (str):The serial number of the device to get the properties of
+        activate (bool):Whether to post APP_ACTIVE before fetching properties
 
         Returns
         -------
@@ -477,7 +496,8 @@ class OwletAPI:
 
         """
         properties = {}
-        await self.activate(device)
+        if activate:
+            await self.activate(device)
         api_response = await self._request(
             "GET",
             f"/dsns/{device}/properties.json",
@@ -528,15 +548,37 @@ class OwletAPI:
         dict: Dictionary containing the response
 
         """
-        await self.validate_authentication()
+        if self._validate_before_request:
+            # Legacy behavior retained for callers that explicitly opt in.
+            await self.validate_authentication()
+        else:
+            # This is a local expiry check and performs no HTTP request while
+            # the current token remains valid.
+            await self.authenticate()
 
-        async with self.session.request(
-            method,
-            self._api_url + url,
-            headers=self.headers,
-            json=data,
-        ) as response:
-            if response.status not in (200, 201):
-                raise OwletConnectionError("Error sending request")
+        for attempt in range(2):
+            request_token = self._auth_token
+            async with self.session.request(
+                method,
+                self._api_url + url,
+                headers=self.headers,
+                json=data,
+            ) as response:
+                if response.status in (200, 201):
+                    return await response.json()
 
-            return await response.json()
+                response_text = await response.text()
+                if (
+                    not self._validate_before_request
+                    and response.status in (401, 403)
+                    and attempt == 0
+                ):
+                    await self._refresh_rejected_token(request_token)
+                    continue
+
+                raise OwletConnectionError(
+                    f"{method} {url} returned HTTP {response.status} "
+                    f"{response.reason}: {response_text[:500]}",
+                )
+
+        raise OwletConnectionError(f"{method} {url} failed after authentication retry")

@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import math
+import os
 import queue
 import re
 import shutil
@@ -38,6 +39,8 @@ LAYOUT_PATH = PROJECT_ROOT / "layout.json" if FROZEN else LAYOUT_TEMPLATE_PATH
 LAYOUT_BACKUP_PATH = PROJECT_ROOT / "layout.settings-backup.json" if FROZEN else PROJECT_ROOT / "wx_monitor_app" / "layout.settings-backup.json"
 ICON_PATH = RESOURCE_ROOT / "wx_monitor_app" / "icon.jpeg"
 LOGIN_PATH = PROJECT_ROOT / "login.json"
+TOKEN_CACHE_PATH = PROJECT_ROOT / "owlet-token-cache.json"
+DEVICE_CACHE_PATH = PROJECT_ROOT / "owlet-device-cache.json"
 SAFETY_ACKNOWLEDGMENT_PATH = PROJECT_ROOT / "safety_acknowledgment.json"
 # Release bots: update this to the latest commit date (YYYY.M.D) for every release.
 APP_VERSION = "2026.8.26"
@@ -90,6 +93,9 @@ SAFETY_ACKNOWLEDGMENT_ITEMS = (
     "understand that I use OwlViewer at my own risk.",
 )
 MAC_ADDRESS_PATTERN = re.compile(r"(?i)(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}")
+# Set to True only if the former per-request /devices.json validation and
+# per-poll APP_ACTIVE behavior is needed for compatibility testing.
+LEGACY_REQUEST_BEHAVIOR = False
 
 
 def _machine_mac_addresses() -> set[str]:
@@ -139,6 +145,79 @@ def create_client_session() -> aiohttp.ClientSession:
 
     connector = aiohttp.TCPConnector(ssl=ssl_context)
     return aiohttp.ClientSession(connector=connector)
+
+
+def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    temporary_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.chmod(temporary_path, 0o600)
+    temporary_path.replace(path)
+
+
+def load_token_cache(config: dict[str, str]) -> dict[str, Any]:
+    try:
+        payload = json.loads(TOKEN_CACHE_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return {}
+    if payload.get("region") != config["region"] or payload.get("username") != config["username"]:
+        return {}
+    token = payload.get("api_token")
+    expiry = payload.get("expiry")
+    refresh = payload.get("refresh")
+    if not isinstance(token, str) or not isinstance(expiry, (int, float)):
+        return {}
+    if refresh is not None and not isinstance(refresh, str):
+        return {}
+    return {"api_token": token, "expiry": float(expiry), "refresh": refresh}
+
+
+def save_token_cache(config: dict[str, str], tokens: dict[str, Any]) -> None:
+    if not isinstance(tokens.get("api_token"), str) or not isinstance(
+        tokens.get("expiry"),
+        (int, float),
+    ):
+        return
+    _write_private_json(
+        TOKEN_CACHE_PATH,
+        {
+            "region": config["region"],
+            "username": config["username"],
+            "api_token": tokens.get("api_token"),
+            "expiry": tokens.get("expiry"),
+            "refresh": tokens.get("refresh"),
+        },
+    )
+
+
+def load_device_cache(config: dict[str, str]) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(DEVICE_CACHE_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return []
+    if payload.get("region") != config["region"] or payload.get("username") != config["username"]:
+        return []
+    devices = payload.get("devices")
+    if not isinstance(devices, list):
+        return []
+    valid_devices = [
+        item
+        for item in devices
+        if isinstance(item, dict)
+        and isinstance(item.get("device"), dict)
+        and isinstance(item["device"].get("dsn"), str)
+    ]
+    return valid_devices if len(valid_devices) == len(devices) else []
+
+
+def save_device_cache(config: dict[str, str], devices: list[dict[str, Any]]) -> None:
+    _write_private_json(
+        DEVICE_CACHE_PATH,
+        {
+            "region": config["region"],
+            "username": config["username"],
+            "devices": devices,
+        },
+    )
 
 
 def create_header_button(parent: wx.Window, label: str) -> wx_buttons.GenButton:
@@ -470,6 +549,7 @@ class OwlViewerFrame(wx.Frame):
         self.chart_values_count = int(defaults.get("chart_values_count", defaults.get("history_size", 30)))
         self.default_chart = bool(defaults.get("chart", False))
         self.poll_seconds = int(defaults.get("poll_interval_seconds", self.layout_config.get("poll_seconds", 10)))
+        self.app_active_interval_seconds = int(defaults.get("app_active_interval_seconds", 30))
         self.vocalize_master_enabled = bool(defaults.get("vocalize_master", False))
         self.vocalization_engine = str(defaults.get("vocalization_engine", "macos_say"))
         self.vocalization_interval_seconds = int(defaults.get("vocalization_interval_seconds", 10))
@@ -496,6 +576,9 @@ class OwlViewerFrame(wx.Frame):
         self._selected_sock_serial: str | None = (
             saved_sock_serial if isinstance(saved_sock_serial, str) else None
         )
+        self._running_device_count: int | None = None
+        self._status_sock_serial: str | None = None
+        self._last_app_active_time: str | None = None
         self._selected_sock_lock = threading.Lock()
         self._poll_wake_event = threading.Event()
         self._sock_buttons: dict[str, wx_buttons.GenButton] = {}
@@ -640,6 +723,12 @@ class OwlViewerFrame(wx.Frame):
         monitor_panel.SetSizer(monitor_layout)
 
         self.settings_poll_ctrl = wx.SpinCtrl(settings_panel, min=1, max=300, initial=self.poll_seconds)
+        self.settings_app_active_ctrl = wx.SpinCtrl(
+            settings_panel,
+            min=1,
+            max=3600,
+            initial=self.app_active_interval_seconds,
+        )
         self.settings_vocal_interval_ctrl = wx.SpinCtrl(
             settings_panel, min=1, max=3600, initial=self.vocalization_interval_seconds
         )
@@ -677,7 +766,7 @@ class OwlViewerFrame(wx.Frame):
             size=(-1, 180),
         )
 
-        settings_grid = wx.FlexGridSizer(20, 2, 6, 10)
+        settings_grid = wx.FlexGridSizer(22, 2, 6, 10)
         settings_grid.Add(wx.StaticText(settings_panel, label="Poll Interval (s):"), flag=wx.ALIGN_CENTER_VERTICAL)
         settings_grid.Add(self.settings_poll_ctrl, flag=wx.EXPAND)
         settings_grid.Add(wx.StaticText(settings_panel, label=""), flag=wx.EXPAND)
@@ -685,6 +774,16 @@ class OwlViewerFrame(wx.Frame):
             wx.StaticText(
                 settings_panel,
                 label="How often API data is fetched. Lower = faster updates, more network traffic.",
+            ),
+            flag=wx.EXPAND,
+        )
+        settings_grid.Add(wx.StaticText(settings_panel, label="APP_ACTIVE Interval (s):"), flag=wx.ALIGN_CENTER_VERTICAL)
+        settings_grid.Add(self.settings_app_active_ctrl, flag=wx.EXPAND)
+        settings_grid.Add(wx.StaticText(settings_panel, label=""), flag=wx.EXPAND)
+        settings_grid.Add(
+            wx.StaticText(
+                settings_panel,
+                label="How often the selected sock is asked to publish live telemetry.",
             ),
             flag=wx.EXPAND,
         )
@@ -817,6 +916,7 @@ class OwlViewerFrame(wx.Frame):
         self.stop_btn.Bind(wx.EVT_BUTTON, self.on_stop)
         self.vocalize_master_btn.Bind(wx.EVT_BUTTON, self.on_toggle_vocalize_master)
         self.settings_poll_ctrl.Bind(wx.EVT_SPINCTRL, self.on_interval_change)
+        self.settings_app_active_ctrl.Bind(wx.EVT_SPINCTRL, self.on_app_active_interval_change)
         self.settings_vocal_interval_ctrl.Bind(wx.EVT_SPINCTRL, self.on_vocal_interval_change)
         self.settings_show_debug_cb.Bind(wx.EVT_CHECKBOX, self.on_toggle_debug_settings)
         self.night_colors_btn.Bind(wx.EVT_BUTTON, self.on_toggle_night_colors)
@@ -863,6 +963,27 @@ class OwlViewerFrame(wx.Frame):
 
     def set_status(self, text: str) -> None:
         self.status.SetLabel(text)
+
+    def _set_running_status(
+        self,
+        device_count: int | None = None,
+        sock_serial: str | None = None,
+        app_active_time: str | None = None,
+    ) -> None:
+        if device_count is not None:
+            self._running_device_count = device_count
+        if sock_serial is not None:
+            self._status_sock_serial = sock_serial
+        if app_active_time is not None:
+            self._last_app_active_time = app_active_time
+
+        count = self._running_device_count or 0
+        parts = [f"Running ({count} device(s), polling every {self.poll_seconds}s)"]
+        if self._status_sock_serial:
+            parts.append(f"Polling sock {self._status_sock_serial}")
+        if self._last_app_active_time:
+            parts.append(f"Calling APP_ACTIVE {self._last_app_active_time}")
+        self.set_status(" — ".join(parts))
 
     def set_error(self, message: str) -> None:
         self.set_status(f"Error: {message}")
@@ -993,6 +1114,11 @@ class OwlViewerFrame(wx.Frame):
         self._save_default_setting("poll_interval_seconds", self.poll_seconds)
         self.set_status(f"Polling interval set to {self.poll_seconds}s")
 
+    def on_app_active_interval_change(self, _event: wx.CommandEvent) -> None:
+        self.app_active_interval_seconds = int(self.settings_app_active_ctrl.GetValue())
+        self._save_default_setting("app_active_interval_seconds", self.app_active_interval_seconds)
+        self.set_status(f"APP_ACTIVE interval set to {self.app_active_interval_seconds}s")
+
     def on_vocal_interval_change(self, _event: wx.CommandEvent) -> None:
         self.vocalization_interval_seconds = int(self.settings_vocal_interval_ctrl.GetValue())
         self._save_default_setting("vocalization_interval_seconds", self.vocalization_interval_seconds)
@@ -1097,6 +1223,7 @@ class OwlViewerFrame(wx.Frame):
 
     def on_apply_settings_tab(self, _event: wx.CommandEvent) -> None:
         self.poll_seconds = int(self.settings_poll_ctrl.GetValue())
+        self.app_active_interval_seconds = int(self.settings_app_active_ctrl.GetValue())
         self.vocalization_interval_seconds = int(self.settings_vocal_interval_ctrl.GetValue())
         self.reconnect_stale_seconds = int(self.settings_reconnect_ctrl.GetValue())
         self.chart_values_count = int(self.settings_chart_count_ctrl.GetValue())
@@ -1108,12 +1235,14 @@ class OwlViewerFrame(wx.Frame):
         self.start_maximized = bool(self.settings_start_maximized_cb.GetValue())
 
         self.settings_poll_ctrl.SetValue(self.poll_seconds)
+        self.settings_app_active_ctrl.SetValue(self.app_active_interval_seconds)
         self.settings_vocal_interval_ctrl.SetValue(self.vocalization_interval_seconds)
         self.vocalize_master_btn.SetLabel(
             "Vocalize: ON" if self.vocalize_master_enabled else "Vocalize: OFF"
         )
 
         self._save_default_setting("poll_interval_seconds", self.poll_seconds)
+        self._save_default_setting("app_active_interval_seconds", self.app_active_interval_seconds)
         self._save_default_setting("vocalization_interval_seconds", self.vocalization_interval_seconds)
         self._save_default_setting("reconnect_stale_seconds", self.reconnect_stale_seconds)
         self._save_default_setting("chart_values_count", self.chart_values_count)
@@ -1207,16 +1336,37 @@ class OwlViewerFrame(wx.Frame):
         reconnect_count = 0
         while not self._stop_event.is_set():
             api: OwletAPI | None = None
+            app_active_task: asyncio.Task[None] | None = None
             try:
                 wx.CallAfter(self.set_status, "Authenticating...")
+                cached_tokens = load_token_cache(config)
                 session = create_client_session()
-                api = OwletAPI(config["region"], config["username"], config["password"], session=session)
+                api = OwletAPI(
+                    config["region"],
+                    config["username"],
+                    config["password"],
+                    token=cached_tokens.get("api_token"),
+                    expiry=cached_tokens.get("expiry"),
+                    refresh=cached_tokens.get("refresh"),
+                    session=session,
+                    validate_before_request=LEGACY_REQUEST_BEHAVIOR,
+                )
                 await api.authenticate()
-                devices = await api.get_devices(versions=None)
-                socks = {device["device"]["dsn"]: Sock(api, device["device"]) for device in devices["response"]}
+                save_token_cache(config, api.tokens)
+                last_saved_tokens = dict(api.tokens)
+
+                cached_devices = load_device_cache(config)
+                if cached_devices:
+                    device_items = cached_devices
+                else:
+                    devices = await api.get_devices(versions=None)
+                    device_items = devices["response"]
+                    save_device_cache(config, device_items)
+
+                socks = {device["device"]["dsn"]: Sock(api, device["device"]) for device in device_items}
                 if not socks:
                     raise OwletError("No devices found")
-                self._get_selected_sock_serial(socks)
+                selected_serial = self._get_selected_sock_serial(socks)
                 wx.CallAfter(
                     self._set_sock_buttons,
                     [(serial, sock.name) for serial, sock in socks.items()],
@@ -1226,13 +1376,29 @@ class OwlViewerFrame(wx.Frame):
                 self._successful_requests_since_reconnect = 0
                 wx.CallAfter(self._update_debug_info_labels)
 
-                wx.CallAfter(self.set_status, f"Running ({len(socks)} device(s), polling every {self.poll_seconds}s)")
+                wx.CallAfter(
+                    self._set_running_status,
+                    len(socks),
+                    selected_serial,
+                )
+                if not LEGACY_REQUEST_BEHAVIOR:
+                    app_active_task = asyncio.create_task(self._run_app_active_timer(api, socks))
                 reconnect_needed = False
                 last_refresh_value: str | None = None
                 last_refresh_changed_at = time.monotonic()
                 last_polled_serial: str | None = None
                 while not self._stop_event.is_set():
+                    if app_active_task is not None and app_active_task.done():
+                        await app_active_task
                     selected_serial, props = await self._poll_once(socks)
+                    wx.CallAfter(
+                        self._set_running_status,
+                        None,
+                        selected_serial,
+                    )
+                    if api.tokens != last_saved_tokens:
+                        save_token_cache(config, api.tokens)
+                        last_saved_tokens = dict(api.tokens)
                     if selected_serial != last_polled_serial:
                         last_polled_serial = selected_serial
                         last_refresh_value = None
@@ -1316,7 +1482,18 @@ class OwlViewerFrame(wx.Frame):
                         )
                         await self._sleep_until_stop(self.reconnect_delay_seconds)
             finally:
+                if app_active_task is not None:
+                    app_active_task.cancel()
+                    try:
+                        await app_active_task
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        # The monitor loop observes task failures before each poll;
+                        # cleanup must not raise the same exception a second time.
+                        pass
                 if api is not None:
+                    save_token_cache(config, api.tokens)
                     await api.close()
 
         wx.CallAfter(self.start_btn.Enable)
@@ -1349,8 +1526,39 @@ class OwlViewerFrame(wx.Frame):
 
     async def _poll_once(self, socks: dict[str, Sock]) -> tuple[str, dict[str, Any]]:
         selected_serial = self._get_selected_sock_serial(socks)
-        result = await socks[selected_serial].update_properties()
+        if LEGACY_REQUEST_BEHAVIOR:
+            called_at = datetime.now().strftime("%H:%M:%S")
+            wx.CallAfter(
+                self._set_running_status,
+                None,
+                selected_serial,
+                called_at,
+            )
+        result = await socks[selected_serial].update_properties(
+            activate=LEGACY_REQUEST_BEHAVIOR,
+        )
         return selected_serial, result["properties"]
+
+    async def _run_app_active_timer(self, api: OwletAPI, socks: dict[str, Sock]) -> None:
+        last_called_at: float | None = None
+        last_called_serial: str | None = None
+        while not self._stop_event.is_set():
+            selected_serial = self._get_selected_sock_serial(socks)
+            now = time.monotonic()
+            interval = max(self.app_active_interval_seconds, 1)
+            due = last_called_at is None or now - last_called_at >= interval
+            if selected_serial != last_called_serial or due:
+                called_at = datetime.now().strftime("%H:%M:%S")
+                wx.CallAfter(
+                    self._set_running_status,
+                    None,
+                    selected_serial,
+                    called_at,
+                )
+                await api.activate(selected_serial)
+                last_called_at = time.monotonic()
+                last_called_serial = selected_serial
+            await asyncio.sleep(0.25)
 
     async def _wait_for_poll_or_selection(self) -> None:
         for _ in range(self.poll_seconds * 10):
